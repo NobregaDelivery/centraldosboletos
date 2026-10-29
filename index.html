@@ -43,7 +43,7 @@
     border-radius: 999px; padding: 8px 14px; display: inline-flex; gap: 6px; align-items: center; font-size: 14px; white-space: nowrap; }
   .refresh:disabled { opacity: .6; }
   .hbtns { display: flex; gap: 8px; }
-  @media (max-width: 360px) { .hbtns .refresh span { display: none; } .refresh { padding: 9px 11px; } }
+  @media (max-width: 520px) { .hbtns .refresh span { display: none; } .hbtns .refresh { padding: 9px 11px; } }
   .forn-list { list-style: none; margin: 0; padding: 4px 18px 8px; display: grid; gap: 8px; }
   .forn-list li { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
   .forn-list li div { flex: 1; min-width: 0; }
@@ -166,6 +166,9 @@
     border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 10px; }
   .conectar .btn { width: 100%; padding: 12px; }
   .conectar .erro { color: var(--late); font-size: 13px; min-height: 1.2em; margin-bottom: 8px; }
+  .guia { text-align: center; font-size: 14px; color: var(--muted); margin: 14px 0 0; }
+  .guia a { color: var(--accent); }
+  .refresh.ajuda { text-decoration: none; font-weight: 700; width: 36px; justify-content: center; padding: 8px 0; }
   .sair { color: var(--muted) !important; font-size: 13px; background: none; border: 0; padding: 4px 18px 16px; text-decoration: underline; cursor: pointer; }
 </style>
 </head>
@@ -174,6 +177,7 @@
   <div class="top">
     <h1>Central dos Boletos<small id="sub">Carregando…</small></h1>
     <div class="hbtns">
+      <a class="refresh ajuda" href="instalar.html" aria-label="Guia de instalação" title="Guia de instalação">?</a>
       <button class="refresh" id="btnForn" type="button" aria-label="Empresas que enviam boleto por e-mail">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 21h18M5 21V5l7-2v18M12 8h7v13M8 9h1M8 13h1M8 17h1M15 12h1M15 16h1"/></svg>
         <span>Empresas</span>
@@ -259,6 +263,7 @@
     <button class="btn primary" type="submit" id="salvarForn">Cadastrar e buscar boletos</button>
   </form>
   <p class="sec" id="quemSou" style="text-transform:none;letter-spacing:0"></p>
+  <p class="sec" style="text-transform:none;letter-spacing:0;padding-top:4px"><a href="instalar.html" style="color:var(--accent)">Guia de instalação (para convidar amigos)</a></p>
   <button class="sair" type="button" id="btnSair">Sair deste aparelho</button>
 </dialog>
 
@@ -270,6 +275,7 @@
     <input id="cSenha" type="password" autocomplete="current-password" placeholder="Sua senha" required>
     <div class="erro" id="cErro"></div>
     <button class="btn primary" type="submit" id="cBtn">Entrar</button>
+    <p class="guia">Primeira vez? <a href="instalar.html">Veja como instalar a sua Central</a></p>
   </form>
 </div>
 

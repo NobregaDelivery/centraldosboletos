@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f3d3e">
+<title>Como instalar — Central dos Boletos</title>
+<link rel="icon" href="icone.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icone-180.png">
+<style>
+  :root {
+    --bg: #f3f5f4; --card: #ffffff; --ink: #14201f; --muted: #5f6d6b; --line: #e1e6e4;
+    --brand: #0f3d3e; --accent: #1b7f6b; --tip-bg: #e5f4ef; --warn-bg: #fdf4e3; --warn: #8a5a12;
+    --shadow: 0 1px 2px rgba(16,32,31,.06), 0 4px 16px rgba(16,32,31,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1514; --card: #172120; --ink: #e8eeec; --muted: #9aa8a5; --line: #26332f;
+      --brand: #0b2c2d; --accent: #4cc3a5; --tip-bg: #15302a; --warn-bg: #362b17; --warn: #f0b65a; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); }
+  header { background: var(--brand); color: #fff; padding: 18px 16px 56px; padding-top: max(18px, env(safe-area-inset-top)); }
+  .top { max-width: 760px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .top a.voltar { color: #fff; text-decoration: none; border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.1);
+    border-radius: 999px; padding: 7px 14px; font-size: 14px; white-space: nowrap; }
+  .top b { font-size: 18px; }
+  .hero { max-width: 760px; margin: 18px auto 0; }
+  .hero h1 { margin: 0 0 6px; font-size: clamp(24px, 6vw, 32px); letter-spacing: -.02em; line-height: 1.15; }
+  .hero p { margin: 0; opacity: .85; max-width: 560px; }
+  main { max-width: 760px; margin: -36px auto 0; padding: 0 16px 64px; }
+
+  .resumo { background: var(--card); border-radius: 16px; box-shadow: var(--shadow); padding: 18px 20px; }
+  .resumo h2 { font-size: 15px; margin: 0 0 10px; }
+  .resumo ul { margin: 0; padding-left: 20px; }
+  .resumo li { margin: 4px 0; }
+
+  .trilha { display: flex; gap: 6px; margin: 22px 0 6px; overflow-x: auto; padding-bottom: 4px; }
+  .trilha a { flex: none; text-decoration: none; color: var(--muted); font-size: 13px; border: 1px solid var(--line);
+    background: var(--card); border-radius: 999px; padding: 5px 12px; }
+
+  section.passo { background: var(--card); border-radius: 16px; box-shadow: var(--shadow); padding: 20px; margin-top: 14px;
+    display: grid; grid-template-columns: 40px 1fr; gap: 4px 14px; scroll-margin-top: 16px; }
+  .num { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center;
+    font-weight: 700; font-size: 16px; }
+  @media (prefers-color-scheme: dark) { .num { color: #0e1514; } }
+  section.passo h2 { margin: 4px 0 8px; font-size: 19px; letter-spacing: -.01em; }
+  section.passo .corpo { grid-column: 2; min-width: 0; }
+  ol, ul { padding-left: 22px; }
+  li { margin: 6px 0; }
+  .menu { font-weight: 600; }
+  .nota { background: var(--tip-bg); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; margin: 12px 0 0; }
+  .aviso { background: var(--warn-bg); color: var(--ink); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; margin: 12px 0 0; }
+  .aviso b { color: var(--warn); }
+  .btn { display: inline-block; background: var(--accent); color: #fff; text-decoration: none; border-radius: 10px;
+    padding: 10px 16px; font-weight: 600; margin: 4px 0; }
+  @media (prefers-color-scheme: dark) { .btn { color: #0e1514; } }
+
+  .faq { background: var(--card); border-radius: 16px; box-shadow: var(--shadow); padding: 8px 20px; margin-top: 22px; }
+  .faq h2 { font-size: 19px; margin: 12px 0 4px; }
+  details { border-top: 1px solid var(--line); padding: 12px 0; }
+  details:first-of-type { border-top: 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 8px 0 0; color: var(--ink); }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 5px; word-break: break-all; }
+  .admin { margin-top: 22px; font-size: 14.5px; color: var(--muted); }
+  .admin summary { color: var(--ink); }
+  footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 30px; }
+  @media (max-width: 420px) {
+    section.passo { grid-template-columns: 1fr; }
+    section.passo .corpo { grid-column: 1; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <b>Central dos Boletos</b>
+    <a class="voltar" href="./">← Voltar ao app</a>
+  </div>
+  <div class="hero">
+    <h1>Como instalar a sua Central dos Boletos</h1>
+    <p>Uma vez só, em uns 10 minutos, pelo computador. Depois você usa pelo celular.</p>
+  </div>
+</header>
+
+<main>
+  <div class="resumo">
+    <h2>Você vai precisar de</h2>
+    <ul>
+      <li>Uma conta <b>Gmail</b>. Seus boletos ficam na sua conta Google, ninguém mais vê.</li>
+      <li>Um <b>computador</b> com o Chrome, só para a instalação.</li>
+      <li>Acesso à planilha modelo. Peça para quem te convidou compartilhar com o seu e-mail.</li>
+    </ul>
+    <p class="nota" style="margin-top:12px">Nada é pago automaticamente: o app só lê e organiza. Você continua pagando pelo app do seu banco.</p>
+  </div>
+
+  <nav class="trilha" aria-label="Passos">
+    <a href="#p1">1. Copiar</a><a href="#p2">2. Instalar</a><a href="#p3">3. Publicar</a><a href="#p4">4. Login</a><a href="#p5">5. Usar</a><a href="#duvidas">Dúvidas</a>
+  </nav>
+
+  <section class="passo" id="p1">
+    <div class="num">1</div>
+    <div class="corpo">
+      <h2>Fazer a sua cópia da planilha</h2>
+      <ol>
+        <li>Entre no Chrome com a sua conta Gmail.</li>
+        <li>Abra o modelo:<br><a class="btn" href="https://docs.google.com/spreadsheets/d/1SCg8qsMF4hhffHmqejD7rScIPrEfTKnDt0BlCxWFmOU/copy" target="_blank" rel="noopener">Fazer cópia da planilha modelo</a></li>
+        <li>Na tela "Copiar documento", clique em <span class="menu">Fazer uma cópia</span>.</li>
+        <li>A sua cópia abre sozinha. Ela já vem com o programa dentro e fica só na sua conta.</li>
+      </ol>
+      <p class="aviso"><b>"Você precisa de acesso"?</b> Peça para quem te convidou compartilhar o modelo com o seu e-mail.</p>
+    </div>
+  </section>
+
+  <section class="passo" id="p2">
+    <div class="num">2</div>
+    <div class="corpo">
+      <h2>Instalar e autorizar o seu Gmail</h2>
+      <ol>
+        <li>Na sua cópia, espere aparecer o menu <span class="menu">💰 Boletos</span> no topo, ao lado de "Ajuda". Se não aparecer, recarregue a página.</li>
+        <li>Clique em <span class="menu">💰 Boletos → 1. Instalar</span>.</li>
+        <li>O Google pede autorização. Clique em <span class="menu">Continuar</span> e escolha a sua conta.</li>
+        <li>Vai aparecer <b>"O Google não verificou este app"</b>. Clique em <span class="menu">Avançado</span> e depois em <span class="menu">Acessar Central dos Boletos (não seguro)</span>.</li>
+        <li>Confira as permissões e clique em <span class="menu">Permitir</span>.</li>
+        <li>Clique de novo em <span class="menu">💰 Boletos → 1. Instalar</span>. Agora ele termina e cria as abas "Contas" e "Fornecedores".</li>
+      </ol>
+      <p class="nota">O aviso do passo 4 é normal: o programa roda na <b>sua</b> conta, para uso pessoal, e não passou pela verificação comercial do Google. A partir daqui ele busca boletos 3 vezes por dia (7h, 12h e 18h) e manda um e-mail de alerta às 8h quando algo estiver para vencer.</p>
+    </div>
+  </section>
+
+  <section class="passo" id="p3">
+    <div class="num">3</div>
+    <div class="corpo">
+      <h2>Publicar o seu motor</h2>
+      <p>O "motor" é o que deixa o app conversar com a sua planilha. Ele só responde para quem tiver o seu login.</p>
+      <ol>
+        <li>Na planilha, clique em <span class="menu">Extensões → Apps Script</span>.</li>
+        <li>No canto superior direito, clique em <span class="menu">Implantar → Nova implantação</span>.</li>
+        <li>O tipo já vem como <b>App da Web</b>. Preencha:
+          <ul>
+            <li><b>Descrição:</b> Motor do app</li>
+            <li><b>Executar como:</b> Eu (o seu e-mail)</li>
+            <li><b>Quem pode acessar:</b> Qualquer pessoa</li>
+          </ul>
+        </li>
+        <li>Clique em <span class="menu">Implantar</span>. Se pedir autorização de novo, aceite como no passo 2.</li>
+        <li>Clique em <span class="menu">Concluído</span> e volte para a planilha.</li>
+      </ol>
+      <p class="nota">"Qualquer pessoa" é necessário para o app no celular alcançar o motor. Sem o seu e-mail e a sua senha, ele não mostra nada.</p>
+    </div>
+  </section>
+
+  <section class="passo" id="p4">
+    <div class="num">4</div>
+    <div class="corpo">
+      <h2>Criar o seu login e pedir a liberação</h2>
+      <ol>
+        <li>Na planilha, clique em <span class="menu">💰 Boletos → 2. Criar ou alterar meu login</span>.</li>
+        <li>Seu e-mail de login já aparece. Digite uma senha com <b>pelo menos 8 caracteres</b>, repita e clique em <span class="menu">Salvar login</span>.</li>
+        <li>Clique em <span class="menu">💰 Boletos → 3. Gerar meu cadastro para o app</span>.</li>
+        <li>Clique em <span class="menu">Copiar mensagem</span> e envie para quem te convidou, pelo WhatsApp ou e-mail.</li>
+      </ol>
+      <p class="nota">A mensagem não contém a sua senha. A senha fica guardada de forma embaralhada no seu motor, e nem quem te convidou consegue vê-la.</p>
+    </div>
+  </section>
+
+  <section class="passo" id="p5">
+    <div class="num">5</div>
+    <div class="corpo">
+      <h2>Entrar no app e cadastrar suas empresas</h2>
+      <p>Quando avisarem que o seu acesso foi liberado:</p>
+      <ol>
+        <li><a href="./">Abra o app</a> e entre com o seu e-mail e a senha do passo 4.</li>
+        <li>Toque em <span class="menu">Empresas</span> e cadastre cada empresa que te manda boleto: o nome e o e-mail de onde vem a cobrança. Para achar esse e-mail, abra uma cobrança no Gmail e copie o endereço ao lado do nome do remetente.</li>
+        <li>Ao cadastrar, o app já procura os boletos dos últimos 45 dias dessa empresa.</li>
+        <li>Boleto que não chega por e-mail? Toque no <span class="menu">+</span> e cole o código de barras: valor e vencimento são preenchidos sozinhos.</li>
+        <li>Depois de pagar, toque em <span class="menu">Marcar pago</span>.</li>
+      </ol>
+      <p class="nota"><b>No celular:</b> abra o app, entre e use <b>Adicionar à tela inicial</b> (Android: menu ⋮ do Chrome; iPhone: botão Compartilhar do Safari). Ele vira um ícone, e você só entra uma vez por aparelho.</p>
+    </div>
+  </section>
+
+  <div class="faq" id="duvidas">
+    <h2>Dúvidas comuns</h2>
+    <details><summary>Quem vê os meus boletos?</summary><p>Só você. Eles ficam na planilha da sua conta Google, e o app só abre com o seu login.</p></details>
+    <details><summary>Esqueci a senha</summary><p>Na planilha, use <span class="menu">💰 Boletos → 2. Criar ou alterar meu login</span> e crie outra. Todos os aparelhos são desconectados.</p></details>
+    <details><summary>Perdi o celular</summary><p>Na planilha, use <span class="menu">💰 Boletos → Sair de todos os aparelhos</span>.</p></details>
+    <details><summary>Errei a senha várias vezes</summary><p>Depois de 5 tentativas erradas, o login trava por 15 minutos.</p></details>
+    <details><summary>Meus boletos chegam no Hotmail ou Outlook</summary><p>Crie uma regra no Hotmail que <b>redireciona</b> os e-mails dessas empresas para o seu Gmail (use "Redirecionar para", não "Encaminhar"). Peça ajuda para quem te convidou.</p></details>
+    <details><summary>Um boleto veio com valor ou vencimento errado</summary><p>Toque no cartão, corrija nos detalhes e toque em <span class="menu">Salvar</span>.</p></details>
+    <details><summary>Quero parar de usar</summary><p>Em <span class="menu">Extensões → Apps Script → Acionadores</span> (ícone de relógio), apague os acionadores. Depois apague a sua cópia da planilha.</p></details>
+  </div>
+
+  <details class="admin">
+    <summary>Para quem administra o app: liberar um novo usuário</summary>
+    <ol>
+      <li>Receba a mensagem de cadastro da pessoa (passo 4). Ela tem uma linha assim: <code>"3f9a…": "https://script.google.com/macros/s/…/exec"</code></li>
+      <li>Abra o <a href="https://github.com/NobregaDelivery/centraldosboletos/blob/main/motores.json" target="_blank" rel="noopener">motores.json no GitHub</a> e clique no lápis (Edit this file).</li>
+      <li>Coloque uma vírgula no fim da última linha com endereço e cole a linha nova antes da chave <code>}</code>.</li>
+      <li>Clique em <b>Commit changes</b>, confirme e espere 1 a 2 minutos.</li>
+    </ol>
+    <p>Para tirar alguém, apague a linha dela. Antes de mandar este guia, compartilhe a planilha "Central dos Boletos (modelo)" com o e-mail da pessoa como Leitor.</p>
+  </details>
+
+  <footer>Central dos Boletos · <a href="./">voltar ao app</a></footer>
+</main>
+</body>
+</html>
