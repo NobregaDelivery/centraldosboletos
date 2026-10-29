@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f3d3e">
+<title>Meus Boletos</title>
+<style>
+  :root {
+    --bg: #f3f5f4; --card: #ffffff; --ink: #14201f; --muted: #5f6d6b; --line: #e1e6e4;
+    --brand: #0f3d3e; --brand-ink: #ffffff; --accent: #1b7f6b;
+    --late: #c0392b; --late-bg: #fdecea; --soon: #b7791f; --soon-bg: #fdf4e3;
+    --ok: #1b7f6b; --ok-bg: #e5f4ef; --later: #50627a; --later-bg: #eef1f6;
+    --shadow: 0 1px 2px rgba(16,32,31,.06), 0 4px 16px rgba(16,32,31,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1514; --card: #172120; --ink: #e8eeec; --muted: #9aa8a5; --line: #26332f;
+      --brand: #0b2c2d; --accent: #4cc3a5;
+      --late: #ff7a6b; --late-bg: #3a1d1a; --soon: #f0b65a; --soon-bg: #362b17;
+      --ok: #4cc3a5; --ok-bg: #15302a; --later: #9fb2cf; --later-bg: #1d2633;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  button { font: inherit; cursor: pointer; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  header { background: var(--brand); color: var(--brand-ink); padding: 20px 16px 64px;
+    padding-top: max(20px, env(safe-area-inset-top)); }
+  .top { max-width: 720px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .top h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; white-space: nowrap; }
+  .top small { display: block; opacity: .7; font-size: 13px; font-weight: 400; }
+  .refresh { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.2);
+    border-radius: 999px; padding: 8px 14px; display: inline-flex; gap: 6px; align-items: center; font-size: 14px; white-space: nowrap; }
+  .refresh:disabled { opacity: .6; }
+  .hbtns { display: flex; gap: 8px; }
+  @media (max-width: 360px) { .hbtns .refresh span { display: none; } .refresh { padding: 9px 11px; } }
+  .forn-list { list-style: none; margin: 0; padding: 4px 18px 8px; display: grid; gap: 8px; }
+  .forn-list li { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+  .forn-list li div { flex: 1; min-width: 0; }
+  .forn-list b { display: block; }
+  .forn-list span { display: block; font-size: 13px; color: var(--muted); word-break: break-all; }
+  .forn-list .x { font-size: 13px; color: var(--late); }
+  .sec { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; padding: 12px 18px 4px; margin: 0; }
+  .note { font-size: 12.5px; color: var(--muted); margin: -4px 0 0; }
+  .refresh svg { width: 16px; height: 16px; }
+  .spin svg { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  main { max-width: 720px; margin: -48px auto 0; padding: 0 16px 104px; }
+
+  .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat { background: var(--card); border-radius: 14px; padding: 12px 10px; box-shadow: var(--shadow); min-width: 0; }
+  .stat span { display: block; font-size: 12px; color: var(--muted); }
+  .stat b { display: block; font-size: clamp(14px, 4.2vw, 19px); margin-top: 2px; white-space: nowrap; letter-spacing: -.02em; }
+  .stat em { font-style: normal; font-size: 12px; color: var(--muted); }
+  .stat.late b { color: var(--late); }
+  .stat.soon b { color: var(--soon); }
+
+  .tabs { display: flex; gap: 6px; margin: 20px 0 8px; overflow-x: auto; }
+  .tab { border: 1px solid var(--line); background: var(--card); color: var(--muted);
+    border-radius: 999px; padding: 6px 14px; font-size: 14px; white-space: nowrap; }
+  .tab[aria-pressed="true"] { background: var(--ink); color: var(--card); border-color: var(--ink); }
+
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 22px 4px 8px; font-weight: 600; display: flex; justify-content: space-between; }
+
+  .card { background: var(--card); border-radius: 14px; box-shadow: var(--shadow); margin-bottom: 8px;
+    border-left: 4px solid var(--c, var(--line)); overflow: hidden; }
+  .card.late { --c: var(--late); } .card.soon { --c: var(--soon); }
+  .card.later { --c: var(--later); } .card.paid { --c: var(--ok); }
+  .card.paid .main-row { opacity: .7; }
+  .main-row { display: flex; gap: 12px; align-items: center; padding: 14px 14px 10px; width: 100%;
+    background: none; border: 0; color: inherit; text-align: left; }
+  .who { flex: 1; min-width: 0; }
+  .who b { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .who span { font-size: 13px; color: var(--muted); }
+  .amount { text-align: right; }
+  .amount b { display: block; font-size: 17px; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 8px; margin-top: 3px;
+    background: var(--later-bg); color: var(--later); }
+  .late .badge { background: var(--late-bg); color: var(--late); }
+  .soon .badge { background: var(--soon-bg); color: var(--soon); }
+  .paid .badge { background: var(--ok-bg); color: var(--ok); }
+  .actions { display: flex; gap: 8px; padding: 0 14px 14px; flex-wrap: wrap; }
+  .actions .btn { min-width: 30%; }
+  .btn { flex: 1; border-radius: 10px; padding: 9px 10px; border: 1px solid var(--line); background: transparent; color: var(--ink);
+    display: inline-flex; justify-content: center; align-items: center; gap: 6px; font-size: 14px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary { color: #0e1514; } }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn svg { width: 16px; height: 16px; }
+
+  .details { display: none; border-top: 1px solid var(--line); padding: 12px 14px 14px; font-size: 14px; }
+  .card.open .details { display: block; }
+  .details dl { margin: 0 0 12px; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; }
+  .details dt { color: var(--muted); }
+  .details dd { margin: 0; word-break: break-word; }
+  .code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .edit { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
+  .edit .wide { grid-column: 1 / -2; }
+  .edit label { font-size: 12px; color: var(--muted); display: grid; gap: 4px; }
+  .edit input { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%; min-width: 0; }
+  .links { display: flex; gap: 14px; margin-top: 12px; flex-wrap: wrap; }
+  .links a, .links button { color: var(--accent); background: none; border: 0; padding: 0; font-size: 14px; text-decoration: none; }
+
+  .empty { text-align: center; color: var(--muted); padding: 40px 16px; }
+  .skeleton { height: 92px; border-radius: 14px; margin-bottom: 8px;
+    background: linear-gradient(90deg, var(--card) 0%, var(--line) 50%, var(--card) 100%); background-size: 200% 100%;
+    animation: shimmer 1.2s infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  .toast { position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(120%);
+    background: var(--ink); color: var(--card); padding: 10px 16px; border-radius: 999px; font-size: 14px;
+    transition: transform .25s ease, opacity .25s; opacity: 0; pointer-events: none; max-width: calc(100% - 32px); text-align: center; }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+  @media (max-width: 380px) {
+    .edit { grid-template-columns: 1fr 1fr; }
+    .edit .btn { grid-column: 1 / -1; }
+  }
+
+  .pixbox { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; padding: 10px; border-radius: 10px; background: var(--bg); }
+  .pixbox canvas, .pixbox img { width: 132px; height: 132px; border-radius: 6px; background: #fff; padding: 6px; flex: none; image-rendering: pixelated; }
+  .pixbox p { margin: 0; font-size: 13px; color: var(--muted); }
+  .danger { color: var(--late) !important; }
+
+  .fab { position: fixed; right: 16px; bottom: max(20px, env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 50%;
+    background: var(--accent); color: #fff; border: 0; box-shadow: 0 6px 20px rgba(0,0,0,.2); display: grid; place-items: center; }
+  @media (prefers-color-scheme: dark) { .fab { color: #0e1514; } }
+  .fab svg { width: 26px; height: 26px; }
+
+  dialog { border: 0; border-radius: 18px; padding: 0; width: min(560px, calc(100% - 24px)); max-height: calc(100% - 24px);
+    background: var(--card); color: var(--ink); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  dialog::backdrop { background: rgba(10,20,20,.45); }
+  .dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px 4px; }
+  .dlg-head h3 { margin: 0; font-size: 18px; }
+  .x { background: none; border: 0; color: var(--muted); font-size: 26px; line-height: 1; padding: 4px 8px; }
+  form.add { padding: 8px 18px 18px; display: grid; gap: 12px; }
+  form.add label { display: grid; gap: 5px; font-size: 13px; color: var(--muted); }
+  form.add input, form.add textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px; width: 100%; min-width: 0; }
+  form.add textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { font-size: 12.5px; min-height: 1em; margin-top: -4px; }
+  .hint.ok { color: var(--ok); } .hint.bad { color: var(--late); }
+  form.add label.filebtn { display: inline-flex; }
+  .filebtn { display: inline-flex; gap: 6px; align-items: center; color: var(--accent); font-size: 13.5px; cursor: pointer; width: fit-content; }
+  .filebtn input { display: none; }
+  .filebtn svg { width: 16px; height: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>Meus Boletos<small id="sub">Carregando…</small></h1>
+    <div class="hbtns">
+      <button class="refresh" id="btnForn" type="button" aria-label="Empresas que enviam boleto por e-mail">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 21h18M5 21V5l7-2v18M12 8h7v13M8 9h1M8 13h1M8 17h1M15 12h1M15 16h1"/></svg>
+        <span>Empresas</span>
+      </button>
+      <button class="refresh" id="refresh" type="button" aria-label="Buscar boletos novos no Gmail">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+        <span>Buscar</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="summary" aria-label="Resumo">
+    <div class="stat"><span>A pagar</span><b class="num" id="sTotal">—</b><em id="sTotalN"></em></div>
+    <div class="stat late"><span>Vencidos</span><b class="num" id="sLate">—</b><em id="sLateN"></em></div>
+    <div class="stat soon"><span>Próx. 7 dias</span><b class="num" id="sSoon">—</b><em id="sSoonN"></em></div>
+  </section>
+
+  <nav class="tabs" role="group" aria-label="Filtro">
+    <button class="tab" data-f="abertos" aria-pressed="true">A pagar</button>
+    <button class="tab" data-f="pagos" aria-pressed="false">Pagos</button>
+    <button class="tab" data-f="todos" aria-pressed="false">Todos</button>
+  </nav>
+
+  <div id="list">
+    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+  </div>
+</main>
+
+<button class="fab" id="fab" type="button" aria-label="Adicionar boleto manualmente">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+</button>
+
+<dialog id="dlg">
+  <div class="dlg-head"><h3>Adicionar boleto</h3><button class="x" type="button" id="fechar" aria-label="Fechar">×</button></div>
+  <form class="add" id="formAdd" method="dialog">
+    <label>Código de barras ou linha digitável
+      <textarea id="fLinha" rows="2" inputmode="numeric" placeholder="Cole ou digite os números do boleto"></textarea>
+    </label>
+    <div class="hint" id="hLinha"></div>
+
+    <label>Pix copia e cola (opcional)
+      <textarea id="fPix" rows="2" placeholder="00020126..."></textarea>
+    </label>
+    <label class="filebtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3M21 14v7h-7"/></svg>
+      Ler QR Code do Pix de uma foto ou print
+      <input type="file" id="fFoto" accept="image/*">
+    </label>
+    <div class="hint" id="hPix"></div>
+
+    <label>Referente a *
+      <input id="fForn" required maxlength="80" placeholder="Ex.: Aluguel, IPVA, Escola">
+    </label>
+    <div class="row2">
+      <label>Vencimento *<input id="fVenc" type="date" required></label>
+      <label>Valor (R$)<input id="fVal" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0,00"></label>
+    </div>
+    <label>Observação (opcional)
+      <input id="fObs" maxlength="200" placeholder="Ex.: parcela 3 de 10">
+    </label>
+    <button class="btn primary" type="submit" id="salvarAdd">Salvar boleto</button>
+  </form>
+</dialog>
+
+<dialog id="dlgForn">
+  <div class="dlg-head"><h3>Empresas</h3><button class="x" type="button" id="fecharForn" aria-label="Fechar">×</button></div>
+  <p class="sec">Minhas contas de e-mail conectadas</p>
+  <ul class="forn-list" id="caixaList"></ul>
+  <p class="sec">Empresas cadastradas</p>
+  <ul class="forn-list" id="fornList"></ul>
+  <p class="sec">Nova empresa</p>
+  <form class="add" id="formForn">
+    <label>Nome da empresa *<input id="nNome" required maxlength="60" placeholder="Ex.: Vivo, Condomínio"></label>
+    <label>E-mail de onde vem o boleto *<input id="nEmail" type="email" required placeholder="financeiro@empresa.com.br"></label>
+    <p class="note">No Gmail, abra um e-mail de cobrança da empresa e copie o endereço que aparece ao lado do nome do remetente.</p>
+    <div class="row2">
+      <label>Palavra no assunto<input id="nAssunto" maxlength="80" placeholder="Ex.: Fatura"></label>
+      <label>Dia fixo de vencimento<input id="nDia" type="number" min="1" max="31" inputmode="numeric" placeholder="Ex.: 10"></label>
+    </div>
+    <p class="note">Os dois são opcionais. A palavra no assunto filtra só os e-mails de cobrança, e o dia fixo é usado quando o e-mail não informa o vencimento.</p>
+    <button class="btn primary" type="submit" id="salvarForn">Cadastrar e buscar boletos</button>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  const DADOS_INICIAIS = <?!= dadosJson ?>;
+  const ERRO_INICIAL = <?!= erroJson ?>;
+  const MSG_INICIAL = <?!= msgJson ?>;
+  const APP_URL = <?!= urlJson ?>;
+  const PDFS_INICIAIS = <?!= pdfsJson ?>;
+  const FORN_INICIAIS = <?!= fornJson ?>;
+  const CAIXAS_INICIAIS = <?!= caixasJson ?>;
+</script>
+<script>
+  const LIB = {
+    pdf: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js',
+    pdfWorker: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js',
+    jsqr: 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
+    qr: 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js'
+  };
+
+  let contas = [];
+  let filtro = 'abertos';
+  const abertos = new Set();
+
+  const $ = id => document.getElementById(id);
+  const brl = v => v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const hoje = () => { const d = new Date(); d.setHours(0,0,0,0); return d; };
+  const parse = s => { if (!s) return null; const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
+  const iso = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  const dataBR = s => { const d = parse(s); return d ? d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '') : 'sem data'; };
+  const dataBRlonga = s => { const d = parse(s); return d ? d.toLocaleDateString('pt-BR') : ''; };
+  const dias = s => { const d = parse(s); return d ? Math.round((d - hoje()) / 864e5) : null; };
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  // ---------- Boleto: validação e leitura da linha digitável ----------
+  function mod10(n) { let s = 0, p = 2; for (let i = n.length - 1; i >= 0; i--) { let x = +n[i] * p; if (x > 9) x = Math.floor(x/10) + x%10; s += x; p = p === 2 ? 1 : 2; } return (10 - s % 10) % 10; }
+  function mod11b(n) { let s = 0, p = 2; for (let i = n.length - 1; i >= 0; i--) { s += +n[i] * p; p = p === 9 ? 2 : p + 1; } const d = 11 - s % 11; return (d === 0 || d === 10 || d === 11) ? 1 : d; }
+  function mod11c(n) { let s = 0, p = 2; for (let i = n.length - 1; i >= 0; i--) { s += +n[i] * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return (r === 0 || r === 1) ? 0 : 11 - r; }
+  function valida47(l) {
+    if (l.length !== 47) return false;
+    if (mod10(l.substr(0,9)) !== +l[9] || mod10(l.substr(10,10)) !== +l[20] || mod10(l.substr(21,10)) !== +l[31]) return false;
+    return mod11b(l.substr(0,4) + l.substr(33,14) + l.substr(4,5) + l.substr(10,10) + l.substr(21,10)) === +l[32];
+  }
+  function valida48(l) {
+    if (l.length !== 48 || l[0] !== '8') return false;
+    const f = (l[2] === '6' || l[2] === '7') ? mod10 : (l[2] === '8' || l[2] === '9') ? mod11c : null;
+    if (!f) return false;
+    for (let i = 0; i < 4; i++) if (f(l.substr(i*12, 11)) !== +l[i*12 + 11]) return false;
+    return true;
+  }
+  function barrasParaLinha(b) {
+    if (b.length !== 44 || mod11b(b.slice(0,4) + b.slice(5)) !== +b[4]) return null;
+    const c1 = b.substr(0,4) + b.substr(19,5), c2 = b.substr(24,10), c3 = b.substr(34,10);
+    return c1 + mod10(c1) + c2 + mod10(c2) + c3 + mod10(c3) + b[4] + b.substr(5,14);
+  }
+  function dataPorFator(f) {
+    const a = new Date(1997, 9, 7); a.setDate(a.getDate() + f);
+    const n = new Date(2025, 1, 22); n.setDate(n.getDate() + f - 1000);
+    return Math.abs(n - Date.now()) < Math.abs(a - Date.now()) ? n : a;
+  }
+  function lerLinha(txt) {
+    let d = String(txt).replace(/\D/g, '');
+    if (!d) return null;
+    if (d.length === 44 && d[0] !== '8') { const l = barrasParaLinha(d); if (!l) return { ok: false }; d = l; }
+    if (d.length === 47) {
+      if (!valida47(d)) return { ok: false };
+      const fator = +d.substr(33,4), valor = +d.substr(37,10) / 100;
+      return { ok: true, valor: valor || null, venc: fator ? iso(dataPorFator(fator)) : null };
+    }
+    if (d.length === 48) {
+      if (!valida48(d)) return { ok: false };
+      const b = [0,12,24,36].map(i => d.substr(i,11)).join('');
+      const valor = (b[2] === '6' || b[2] === '7') ? +b.substr(4,11) / 100 : null;
+      return { ok: true, valor: valor || null, venc: null };
+    }
+    return { ok: false, incompleto: d.length < 44 };
+  }
+
+  // ---------- Pix ----------
+  function crc16(s) {
+    let c = 0xFFFF;
+    for (let i = 0; i < s.length; i++) { c ^= s.charCodeAt(i) << 8; for (let j = 0; j < 8; j++) c = (c & 0x8000) ? ((c << 1) ^ 0x1021) & 0xFFFF : (c << 1) & 0xFFFF; }
+    return c.toString(16).toUpperCase().padStart(4, '0');
+  }
+  function pixValido(s) {
+    s = String(s || '').trim();
+    return s.length >= 50 && s.startsWith('000201') && /BR\.GOV\.BCB\.PIX/i.test(s) &&
+           s.slice(-8, -4) === '6304' && crc16(s.slice(0, -4)) === s.slice(-4).toUpperCase();
+  }
+  function pixCampos(s) {
+    const r = {}; let i = 0;
+    while (i + 4 <= s.length) { const id = s.substr(i,2), n = +s.substr(i+2,2); r[id] = s.substr(i+4, n); i += 4 + n; }
+    return { valor: r['54'] ? Number(r['54']) : null, nome: r['59'] || '' };
+  }
+
+  // ---------- Bibliotecas carregadas só quando precisa ----------
+  const carregadas = {};
+  function carregar(src) {
+    return carregadas[src] || (carregadas[src] = new Promise((ok, err) => {
+      const s = document.createElement('script'); s.src = src; s.onload = ok;
+      s.onerror = () => { delete carregadas[src]; err(new Error('Sem conexão para carregar o leitor.')); };
+      document.head.appendChild(s);
+    }));
+  }
+
+  function qrDeCanvas(canvas) {
+    const ctx = canvas.getContext('2d');
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const r = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+    return r && r.data ? r.data.trim() : null;
+  }
+
+  async function lerQrDeImagem(file) {
+    await carregar(LIB.jsqr);
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((ok, err) => { const i = new Image(); i.onload = () => ok(i); i.onerror = err; i.src = url; });
+      for (const max of [1600, 900, 2400]) {
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        const t = qrDeCanvas(c); if (t) return t;
+      }
+      return null;
+    } finally { URL.revokeObjectURL(url); }
+  }
+
+  async function lerQrDePdfs(arquivos) {
+    await carregar(LIB.pdf); await carregar(LIB.pdfWorker); await carregar(LIB.jsqr);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = LIB.pdfWorker;
+    for (const a of arquivos) {
+      const bytes = Uint8Array.from(atob(a.b64), ch => ch.charCodeAt(0));
+      const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+      for (let n = 1; n <= Math.min(pdf.numPages, 3); n++) {
+        const page = await pdf.getPage(n);
+        for (const escala of [2, 3.5]) {
+          const vp = page.getViewport({ scale: escala });
+          const c = document.createElement('canvas'); c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+          const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+          await page.render({ canvasContext: ctx, viewport: vp }).promise;
+          const t = qrDeCanvas(c);
+          if (t && pixValido(t)) return t;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function desenharQr(alvo, texto) {
+    try {
+      await carregar(LIB.qr);
+      const q = qrcode(0, 'M'); q.addData(texto); q.make();
+      alvo.innerHTML = q.createImgTag(4, 0);
+      const img = alvo.querySelector('img'); if (img) img.alt = 'QR Code Pix';
+    } catch (e) { alvo.textContent = ''; }
+  }
+
+  // ---------- Interface ----------
+  const ehAviso = c => /^aviso DDA/.test(c.origem || '') && !c.vencimento;
+  function situacao(c) {
+    if (c.status === 'Pago') return { cls: 'paid', txt: 'Pago' };
+    if (ehAviso(c)) return { cls: 'soon', txt: 'Confira no banco' };
+    const n = dias(c.vencimento);
+    if (n === null) return { cls: 'later', txt: 'Sem vencimento' };
+    if (n < 0) return { cls: 'late', txt: n === -1 ? 'Venceu ontem' : 'Venceu há ' + (-n) + ' dias' };
+    if (n === 0) return { cls: 'late', txt: 'Vence hoje' };
+    if (n <= 7) return { cls: 'soon', txt: n === 1 ? 'Vence amanhã' : 'Vence em ' + n + ' dias' };
+    return { cls: 'later', txt: 'Em ' + n + ' dias' };
+  }
+
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2800);
+  }
+
+  function chamar(fn, ...args) {
+    return new Promise((ok, err) => {
+      if (!window.google || !google.script || !google.script.run) return err(new Error('indisponível'));
+      google.script.run.withSuccessHandler(ok).withFailureHandler(err)[fn](...args);
+    });
+  }
+
+  function resumo() {
+    const abertas = contas.filter(c => c.status !== 'Pago');
+    const soma = arr => arr.reduce((s, c) => s + (c.valor || 0), 0);
+    const late = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n < 0; });
+    const soon = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n >= 0 && n <= 7; });
+    $('sTotal').textContent = brl(soma(abertas));  $('sTotalN').textContent = abertas.length + ' conta(s)';
+    $('sLate').textContent = brl(soma(late));      $('sLateN').textContent = late.length + ' conta(s)';
+    $('sSoon').textContent = brl(soma(soon));      $('sSoonN').textContent = soon.length + ' conta(s)';
+    $('sub').textContent = 'Atualizado ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+  const ICON_PIX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5l4 4-4 4-4-4z M12 13.5l4 4-4 4-4-4z M2.5 12l4-4 4 4-4 4z M13.5 12l4-4 4 4-4 4z"/></svg>';
+  const ICON_OK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg>';
+
+  function cardHTML(c) {
+    const s = situacao(c);
+    const pago = c.status === 'Pago';
+    const manual = /^manual-/.test(c.id);
+    return `
+    <article class="card ${s.cls} ${abertos.has(c.id) ? 'open' : ''}" data-id="${esc(c.id)}">
+      <button class="main-row" data-act="toggle" aria-expanded="${abertos.has(c.id)}">
+        <div class="who"><b>${esc(c.fornecedor)}</b><span>${ehAviso(c)
+          ? 'Boleto novo no seu CNPJ · aviso de ' + esc(dataBR(c.recebido))
+          : 'Vence ' + esc(dataBR(c.vencimento)) + (c.obs ? ' · ' + esc(c.obs) : '')}</span></div>
+        <div class="amount"><b class="num">${brl(c.valor)}</b><span class="badge">${s.txt}</span></div>
+      </button>
+      <div class="actions">
+        ${c.linha ? `<button class="btn" data-act="copy">${ICON_COPY}Copiar boleto</button>` : ''}
+        ${c.pix ? `<button class="btn" data-act="copypix">${ICON_PIX}Copiar Pix</button>` : ''}
+        ${!c.linha && !c.pix ? `<button class="btn" disabled>${ICON_COPY}Sem código</button>` : ''}
+        ${pago
+          ? `<button class="btn" data-act="unpay">Desfazer pago</button>`
+          : `<button class="btn primary" data-act="pay">${ICON_OK}Marcar pago</button>`}
+      </div>
+      <div class="details">
+        ${c.pix ? `<div class="pixbox"><div class="qr" data-pix="${esc(c.pix)}"></div>
+          <p>Escaneie com o app do banco ou use <b>Copiar Pix</b> para pagar com Pix copia e cola.</p></div>` : ''}
+        <dl>
+          <dt>Origem</dt><dd>${manual ? 'Cadastrado manualmente' : (c.conta ? esc(c.conta) : 'será identificada na próxima busca')}</dd>
+          ${!manual && c.remetente ? `<dt>Enviado por</dt><dd>${esc(c.remetente)}</dd>` : ''}
+          <dt>Boleto</dt><dd class="code">${c.linha ? esc(c.linha) : '—'}</dd>
+          <dt>Chegou em</dt><dd>${esc(dataBR(c.recebido))}</dd>
+          ${manual ? '' : `<dt>Assunto</dt><dd>${esc(c.assunto)}</dd>`}
+          <dt>Dados de</dt><dd>${esc(c.origem)}</dd>
+        </dl>
+        <div class="edit">
+          <label>Vencimento<input type="date" data-f="vencimento" value="${esc(c.vencimento)}"></label>
+          <label>Valor (R$)<input type="number" step="0.01" inputmode="decimal" data-f="valor" value="${c.valor ?? ''}"></label>
+          <button class="btn" data-act="save">Salvar</button>
+        </div>
+        <div class="links">
+          ${c.link ? `<a href="${esc(c.link)}" target="_blank" rel="noopener">Abrir e-mail</a>` : ''}
+          ${!c.pix && !manual ? `<button data-act="lerpix">Buscar Pix no PDF</button>` : ''}
+          <button data-act="addpix">${c.pix ? 'Trocar Pix' : 'Colar Pix'}</button>
+          <button data-act="del" class="danger">Excluir</button>
+        </div>
+      </div>
+    </article>`;
+  }
+
+  function render() {
+    resumo();
+    let lista = contas.slice();
+    if (filtro === 'abertos') lista = lista.filter(c => c.status !== 'Pago');
+    if (filtro === 'pagos') lista = lista.filter(c => c.status === 'Pago');
+    const ord = (a, b) => (a.vencimento || '9999') < (b.vencimento || '9999') ? -1 : 1;
+    lista.sort(filtro === 'pagos' ? (a, b) => -ord(a, b) : ord);
+
+    if (!lista.length) {
+      $('list').innerHTML = `<div class="empty">${filtro === 'pagos' ? 'Nenhuma conta marcada como paga ainda.' : 'Tudo em dia. Nenhuma conta a pagar.'}</div>`;
+      return;
+    }
+    const aberto = c => c.status !== 'Pago', n = c => dias(c.vencimento);
+    const grupos = filtro === 'pagos' ? [['Pagos', lista]] : [
+      ['Vencidos', lista.filter(c => aberto(c) && n(c) !== null && n(c) < 0)],
+      ['Próximos 7 dias', lista.filter(c => aberto(c) && n(c) !== null && n(c) >= 0 && n(c) <= 7)],
+      ['Avisos do DDA (confira no banco)', lista.filter(c => aberto(c) && ehAviso(c))],
+      ['Mais adiante', lista.filter(c => aberto(c) && n(c) !== null && n(c) > 7)],
+      ['Sem vencimento identificado', lista.filter(c => aberto(c) && n(c) === null && !ehAviso(c))],
+      ['Pagos', lista.filter(c => !aberto(c))]
+    ];
+    $('list').innerHTML = grupos.filter(g => g[1].length).map(([t, arr]) =>
+      `<h2><span>${t}</span><span class="num">${brl(arr.reduce((s, c) => s + (c.valor || 0), 0))}</span></h2>` + arr.map(cardHTML).join('')
+    ).join('');
+    document.querySelectorAll('.card.open .qr[data-pix]').forEach(el => desenharQr(el, el.dataset.pix));
+  }
+
+  // Ações: tenta a chamada direta; se falhar ou demorar (ex.: várias contas Google
+  // logadas no navegador), recarrega a página com a ação no endereço.
+  function viaLink(params) {
+    if (!APP_URL) return false;
+    params.n = Date.now() + '' + Math.floor(Math.random() * 1000);
+    const q = Object.entries(params).map(([k, v]) => k + '=' + encodeURIComponent(v ?? '')).join('&');
+    window.top.location.href = APP_URL + '?' + q;
+    return true;
+  }
+
+  let fornecedores = [], caixas = [];
+  async function atualizar(fn, args, linkParams, espera) {
+    try {
+      const r = await Promise.race([
+        chamar(fn, ...args),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), espera || 12000))
+      ]);
+      if (Array.isArray(r)) contas = r;
+      else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; renderForn(); if (r.msg) toast(r.msg); }
+      render(); return true;
+    } catch (e) {
+      if (linkParams && viaLink(linkParams)) { toast('Atualizando…'); return false; }
+      toast('Erro: ' + (e && e.message ? e.message : e)); return false;
+    }
+  }
+
+  function mostrarErro(msg) {
+    $('sub').textContent = 'Não foi possível carregar';
+    $('list').innerHTML = '<div class="empty"><b>Erro ao carregar os boletos</b><br><br>' + esc(msg) + '</div>';
+  }
+
+  async function copiar(txt) {
+    try { await navigator.clipboard.writeText(txt); }
+    catch (e) { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  }
+
+  async function processarPdfs(id, arquivos) {
+    if (!arquivos || !arquivos.length) { toast('Esse e-mail não tem PDF anexo.'); return; }
+    toast('Procurando QR Code no PDF…');
+    try {
+      const pix = await lerQrDePdfs(arquivos);
+      if (!pix) { toast('Não encontrei QR Code Pix no PDF.'); return; }
+      if (await atualizar('atualizarConta', [id, { pix }], { acao: 'pix', id, pix })) {
+        abertos.add(id); render(); toast('Pix encontrado e salvo');
+      }
+    } catch (e) { toast('Erro ao ler o PDF: ' + e.message); }
+  }
+
+  $('list').addEventListener('click', async ev => {
+    const btn = ev.target.closest('[data-act]'); if (!btn) return;
+    const card = btn.closest('.card'); const id = card.dataset.id;
+    const c = contas.find(x => x.id === id);
+    const act = btn.dataset.act;
+
+    if (act === 'toggle') {
+      abertos.has(id) ? abertos.delete(id) : abertos.add(id);
+      card.classList.toggle('open'); btn.setAttribute('aria-expanded', abertos.has(id));
+      const q = card.querySelector('.qr[data-pix]'); if (q && !q.innerHTML) desenharQr(q, q.dataset.pix);
+    }
+    if (act === 'copy') { await copiar(c.linha.replace(/\D/g, '')); toast('Código do boleto copiado'); }
+    if (act === 'copypix') { await copiar(c.pix); toast('Pix copia e cola copiado'); }
+    if (act === 'pay' || act === 'unpay') {
+      btn.disabled = true;
+      const status = act === 'pay' ? 'Pago' : 'A pagar';
+      if (await atualizar('atualizarConta', [id, { status }], { acao: 'status', id, valor: status }))
+        toast(act === 'pay' ? c.fornecedor + ' marcado como pago' : 'Voltou para "a pagar"');
+    }
+    if (act === 'save') {
+      btn.disabled = true;
+      const venc = card.querySelector('[data-f="vencimento"]').value;
+      const val = card.querySelector('[data-f="valor"]').value;
+      if (await atualizar('atualizarConta', [id, { vencimento: venc, valor: val === '' ? null : Number(val) }],
+                          { acao: 'editar', id, venc, val })) toast('Alterações salvas');
+      else btn.disabled = false;
+    }
+    if (act === 'addpix') {
+      const pix = (prompt('Cole aqui o código Pix copia e cola:') || '').trim();
+      if (!pix) return;
+      if (!pixValido(pix)) { toast('Esse código Pix não é válido.'); return; }
+      if (await atualizar('atualizarConta', [id, { pix }], { acao: 'pix', id, pix })) toast('Pix salvo');
+    }
+    if (act === 'lerpix') {
+      btn.disabled = true; btn.textContent = 'Lendo PDF…';
+      try {
+        const arquivos = await Promise.race([chamar('getPdfs', id), new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 15000))]);
+        await processarPdfs(id, arquivos);
+      } catch (e) {
+        if (e && (e.message === 'timeout' || e.message === 'indisponível')) viaLink({ acao: 'lerpix', id });
+        else toast(e && e.message ? e.message : 'Erro ao buscar o PDF');
+      }
+      btn.disabled = false; btn.textContent = 'Buscar Pix no PDF';
+    }
+    if (act === 'del') {
+      if (!confirm('Excluir "' + c.fornecedor + '" da lista?')) return;
+      if (await atualizar('excluirConta', [id], { acao: 'excluir', id })) toast('Conta excluída');
+    }
+  });
+
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+    filtro = t.dataset.f;
+    document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-pressed', x === t));
+    render();
+  }));
+
+  $('refresh').addEventListener('click', async () => {
+    const b = $('refresh'); const antes = contas.length;
+    b.disabled = true; b.classList.add('spin'); $('sub').textContent = 'Buscando no Gmail…';
+    if (await atualizar('buscarAgora', [], { acao: 'buscar' }, 90000)) {
+      const novos = contas.length - antes;
+      toast(novos > 0 ? novos + ' boleto(s) novo(s)' : 'Nenhum boleto novo');
+    }
+    b.disabled = false; b.classList.remove('spin');
+  });
+
+  // ---------- Formulário de inclusão manual ----------
+  const dlg = $('dlg');
+  $('fab').addEventListener('click', () => { $('formAdd').reset(); $('hLinha').textContent = ''; $('hPix').textContent = ''; dlg.showModal(); });
+  $('fechar').addEventListener('click', () => dlg.close());
+
+  function dica(el, txt, ok) { el.textContent = txt; el.className = 'hint ' + (ok === true ? 'ok' : ok === false ? 'bad' : ''); }
+
+  $('fLinha').addEventListener('input', () => {
+    const r = lerLinha($('fLinha').value);
+    if (!r) return dica($('hLinha'), '');
+    if (!r.ok) return dica($('hLinha'), r.incompleto ? 'Continue digitando…' : 'Código inválido. Confira os números.', r.incompleto ? undefined : false);
+    if (r.venc && !$('fVenc').value) $('fVenc').value = r.venc;
+    if (r.valor && !$('fVal').value) $('fVal').value = r.valor.toFixed(2);
+    dica($('hLinha'), '✓ Boleto válido' + (r.valor ? ' · ' + brl(r.valor) : '') + (r.venc ? ' · vence ' + dataBRlonga(r.venc) : ''), true);
+  });
+
+  function aplicarPix(pix) {
+    if (!pix) return dica($('hPix'), '');
+    if (!pixValido(pix)) return dica($('hPix'), 'Código Pix inválido.', false);
+    const p = pixCampos(pix);
+    if (p.valor && !$('fVal').value) $('fVal').value = p.valor.toFixed(2);
+    if (p.nome && !$('fForn').value) $('fForn').value = p.nome.trim();
+    dica($('hPix'), '✓ Pix válido' + (p.nome ? ' · ' + p.nome.trim() : '') + (p.valor ? ' · ' + brl(p.valor) : ''), true);
+  }
+  $('fPix').addEventListener('input', () => aplicarPix($('fPix').value.trim()));
+
+  $('fFoto').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    dica($('hPix'), 'Lendo QR Code…');
+    try {
+      const t = await lerQrDeImagem(f);
+      if (!t) return dica($('hPix'), 'Não encontrei um QR Code na imagem. Tente uma foto mais próxima e nítida.', false);
+      $('fPix').value = t; aplicarPix(t);
+    } catch (err) { dica($('hPix'), err.message, false); }
+    e.target.value = '';
+  });
+
+  $('formAdd').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const pix = $('fPix').value.trim();
+    if (pix && !pixValido(pix)) { dica($('hPix'), 'Código Pix inválido. Apague ou corrija.', false); return; }
+    const linhaTxt = $('fLinha').value.trim();
+    const rl = lerLinha(linhaTxt);
+    if (linhaTxt && rl && !rl.ok) { dica($('hLinha'), 'Código do boleto inválido. Apague ou corrija.', false); return; }
+    const campos = {
+      fornecedor: $('fForn').value.trim(), obs: $('fObs').value.trim(), vencimento: $('fVenc').value,
+      valor: $('fVal').value === '' ? null : Number($('fVal').value), linha: linhaTxt, pix
+    };
+    const b = $('salvarAdd'); b.disabled = true; b.textContent = 'Salvando…';
+    const ok = await atualizar('adicionarManual', [campos],
+      { acao: 'adicionar', forn: campos.fornecedor, obs: campos.obs, venc: campos.vencimento,
+        val: campos.valor ?? '', linha: campos.linha, pix: campos.pix });
+    b.disabled = false; b.textContent = 'Salvar boleto';
+    if (ok) { dlg.close(); toast('Boleto adicionado'); }
+  });
+
+  // ---------- Empresas ----------
+  const dlgF = $('dlgForn');
+  function renderForn() {
+    $('caixaList').innerHTML = caixas.length ? caixas.map(c => `
+      <li><div><b>${esc(c.conta)}</b><span>${c.tipo === 'principal' ? 'Conta principal' : 'Conta extra'}${c.ultima ? ' · última busca ' + esc(c.ultima) : ''}</span></div></li>`).join('')
+      : '<li><div><span>Aparece depois da primeira busca.</span></div></li>';
+    $('fornList').innerHTML = fornecedores.length ? fornecedores.map((f, i) => `
+      <li><div><b>${esc(f.nome)}</b><span>${esc(f.email)}${f.assunto ? ' · assunto: "' + esc(f.assunto) + '"' : ''}${f.dia ? ' · vence dia ' + esc(f.dia) : ''}</span></div>
+      <button class="x" type="button" data-i="${i}">Remover</button></li>`).join('')
+      : '<li><div><span>Nenhuma empresa cadastrada ainda.</span></div></li>';
+  }
+  $('btnForn').addEventListener('click', () => { renderForn(); dlgF.showModal(); });
+  $('fecharForn').addEventListener('click', () => dlgF.close());
+  $('fornList').addEventListener('click', async ev => {
+    const b = ev.target.closest('button[data-i]'); if (!b) return;
+    const f = fornecedores[+b.dataset.i];
+    if (!confirm('Parar de buscar boletos de ' + f.nome + '?\nOs boletos que já estão na lista continuam.')) return;
+    b.disabled = true;
+    await atualizar('removerFornecedor', [f.email, f.assunto], { acao: 'delforn', email: f.email, assunto: f.assunto });
+  });
+  $('formForn').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const f = { nome: $('nNome').value.trim(), email: $('nEmail').value.trim(), assunto: $('nAssunto').value.trim(), dia: $('nDia').value.trim() };
+    const b = $('salvarForn'); b.disabled = true; b.textContent = 'Cadastrando e buscando no Gmail…';
+    const ok = await atualizar('adicionarFornecedor', [f], { acao: 'addforn', ...f }, 90000);
+    b.disabled = false; b.textContent = 'Cadastrar e buscar boletos';
+    if (ok) { $('formForn').reset(); dlgF.close(); }
+  });
+
+  // ---------- Início: dados já vêm prontos do servidor ----------
+  if (ERRO_INICIAL) mostrarErro(ERRO_INICIAL);
+  else {
+    contas = DADOS_INICIAIS; fornecedores = FORN_INICIAIS || []; caixas = CAIXAS_INICIAIS || []; render();
+    if (MSG_INICIAL) toast(MSG_INICIAL);
+    if (PDFS_INICIAIS && PDFS_INICIAIS.id) processarPdfs(PDFS_INICIAIS.id, PDFS_INICIAIS.arquivos);
+  }
+</script>
+</body>
+</html>
