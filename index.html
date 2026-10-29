@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f3d3e">
-<title>Meus Boletos</title>
+<title>Central dos Boletos</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icone.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icone-180.png">
@@ -162,7 +162,7 @@
   .conectar .box { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); padding: 24px; width: min(420px, 100%); }
   .conectar h2 { all: unset; display: block; font-size: 20px; font-weight: 700; margin-bottom: 6px; color: var(--ink); }
   .conectar p { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
-  .conectar input { font: inherit; font-family: ui-monospace, Menlo, Consolas, monospace; width: 100%; padding: 12px; border-radius: 10px;
+  .conectar input { font: inherit; width: 100%; padding: 12px; border-radius: 10px;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 10px; }
   .conectar .btn { width: 100%; padding: 12px; }
   .conectar .erro { color: var(--late); font-size: 13px; min-height: 1.2em; margin-bottom: 8px; }
@@ -172,7 +172,7 @@
 <body>
 <header>
   <div class="top">
-    <h1>Meus Boletos<small id="sub">Carregando…</small></h1>
+    <h1>Central dos Boletos<small id="sub">Carregando…</small></h1>
     <div class="hbtns">
       <button class="refresh" id="btnForn" type="button" aria-label="Empresas que enviam boleto por e-mail">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 21h18M5 21V5l7-2v18M12 8h7v13M8 9h1M8 13h1M8 17h1M15 12h1M15 16h1"/></svg>
@@ -258,14 +258,16 @@
     <p class="note">Os dois são opcionais. A palavra no assunto filtra só os e-mails de cobrança, e o dia fixo é usado quando o e-mail não informa o vencimento.</p>
     <button class="btn primary" type="submit" id="salvarForn">Cadastrar e buscar boletos</button>
   </form>
-  <button class="sair" type="button" id="btnSair">Desconectar este aparelho</button>
+  <p class="sec" id="quemSou" style="text-transform:none;letter-spacing:0"></p>
+  <button class="sair" type="button" id="btnSair">Sair deste aparelho</button>
 </dialog>
 
 <div class="conectar" id="conectar">
   <form class="box" id="formConectar">
-    <h2>Conectar este aparelho</h2>
-    <p>Digite a senha do app. Ela fica guardada só neste navegador, e você só precisa digitar uma vez por aparelho.</p>
-    <input id="cSenha" type="password" autocomplete="current-password" placeholder="Cole aqui a senha do app" required>
+    <h2>Central dos Boletos</h2>
+    <p>Entre com seu e-mail e senha. Este aparelho fica conectado até você sair.</p>
+    <input id="cEmail" type="email" autocomplete="username" placeholder="Seu e-mail" required>
+    <input id="cSenha" type="password" autocomplete="current-password" placeholder="Sua senha" required>
     <div class="erro" id="cErro"></div>
     <button class="btn primary" type="submit" id="cBtn">Entrar</button>
   </form>
@@ -274,8 +276,9 @@
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
-  // Endereço do "motor" (Google Apps Script). Não é segredo: sem a senha do app ele não responde nada.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbxRVB3s2yvY0SoTLsOvQS0WclWFzH4JDkJNpgtgRsij9KorFX22SMwEc_oiDiwws0wpAA/exec';
+  // Cada usuário tem o próprio "motor" (Google Apps Script). A lista fica em motores.json,
+  // indexada pelo hash do e-mail. O endereço sozinho não dá acesso: o login é conferido no motor.
+  const DIRETORIO = 'motores.json';
 </script>
 <script>
   const LIB = {
@@ -441,31 +444,51 @@
   }
 
   // ---------- Conexão com o motor ----------
-  const CHAVE = 'meus_boletos_senha';
-  const lerSenha = () => { try { return localStorage.getItem(CHAVE) || ''; } catch (e) { return senhaMemoria; } };
-  let senhaMemoria = '';
-  const gravarSenha = s => { senhaMemoria = s; try { s ? localStorage.setItem(CHAVE, s) : localStorage.removeItem(CHAVE); } catch (e) {} };
+  const CHAVE = 'central_boletos_sessao';
+  let sessaoMemoria = null;
+  const lerSessao = () => { try { return JSON.parse(localStorage.getItem(CHAVE) || 'null'); } catch (e) { return sessaoMemoria; } };
+  const gravarSessao = s => { sessaoMemoria = s; try { s ? localStorage.setItem(CHAVE, JSON.stringify(s)) : localStorage.removeItem(CHAVE); } catch (e) {} };
+  try { localStorage.removeItem('meus_boletos_senha'); } catch (e) {}
 
-  async function chamar(fn, ...args) {
-    const senha = lerSenha();
-    if (!senha) { pedirSenha(); throw new Error('Conecte este aparelho com a senha do app.'); }
+  async function hashEmail(email) {
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.trim().toLowerCase()));
+    return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function postar(url, corpo) {
     let r;
     try {
-      const resp = await fetch(API_URL, {
-        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ senha, fn, args })
-      });
+      const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(corpo) });
       r = await resp.json();
     } catch (e) { throw new Error('Sem conexão com o servidor. Tente de novo.'); }
-    if (!r.ok && r.erro === 'senha') { gravarSenha(''); pedirSenha('Senha incorreta ou trocada. Digite a senha atual.'); throw new Error(r.mensagem); }
+    return r;
+  }
+
+  async function chamar(fn, ...args) {
+    const s = lerSessao();
+    if (!s) { pedirSenha(); throw new Error('Entre com seu e-mail e senha.'); }
+    const r = await postar(s.url, { token: s.token, fn, args });
+    if (!r.ok && r.erro === 'sessao') { gravarSessao(null); pedirSenha(r.mensagem); throw new Error(r.mensagem); }
     if (!r.ok) throw new Error(r.mensagem || 'Erro no servidor');
     return r.dados;
+  }
+
+  async function entrar(email, senha) {
+    let mapa;
+    try { mapa = await (await fetch(DIRETORIO + '?v=' + Date.now(), { cache: 'no-store' })).json(); }
+    catch (e) { throw new Error('Não consegui carregar a lista de usuários. Tente de novo.'); }
+    const url = mapa[await hashEmail(email)];
+    if (!url) throw new Error('E-mail ou senha incorretos.');
+    const aparelho = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    const r = await postar(url, { acao: 'login', email, senha, aparelho });
+    if (!r.ok) throw new Error(r.mensagem || 'Não foi possível entrar.');
+    gravarSessao({ url, token: r.dados.token, email: r.dados.email });
   }
 
   function pedirSenha(msg) {
     $('cErro').textContent = msg || '';
     $('conectar').classList.add('show');
-    setTimeout(() => $('cSenha').focus(), 50);
+    setTimeout(() => ($('cEmail').value ? $('cSenha') : $('cEmail')).focus(), 50);
   }
 
   function resumo() {
@@ -740,33 +763,37 @@
     if (ok) { $('formForn').reset(); dlgF.close(); }
   });
 
-  // ---------- Conectar / desconectar ----------
+  // ---------- Entrar / sair ----------
+  function aplicarEstado(r) {
+    contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; render(); renderForn();
+    const s = lerSessao(); $('quemSou').textContent = s ? 'Conectado como ' + s.email : '';
+  }
   $('formConectar').addEventListener('submit', async ev => {
     ev.preventDefault();
-    const s = $('cSenha').value.trim();
-    if (!s) return;
-    gravarSenha(s);
-    const b = $('cBtn'); b.disabled = true; b.textContent = 'Conectando…'; $('cErro').textContent = '';
+    const email = $('cEmail').value.trim(), senha = $('cSenha').value;
+    if (!email || !senha) return;
+    const b = $('cBtn'); b.disabled = true; b.textContent = 'Entrando…'; $('cErro').textContent = '';
     try {
-      const r = await chamar('estado');
-      $('conectar').classList.remove('show'); $('cSenha').value = '';
-      contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; render(); renderForn();
-      toast('Aparelho conectado');
-    } catch (e) { if (lerSenha()) $('cErro').textContent = e.message; }
+      await entrar(email, senha);
+      $('cSenha').value = '';
+      $('conectar').classList.remove('show');
+      aplicarEstado(await chamar('estado'));
+    } catch (e) { $('cErro').textContent = e.message; }
     b.disabled = false; b.textContent = 'Entrar';
   });
-  $('btnSair').addEventListener('click', () => {
-    if (!confirm('Desconectar este aparelho? Você vai precisar digitar a senha do app de novo.')) return;
-    gravarSenha(''); dlgF.close(); contas = []; render(); pedirSenha();
+  $('btnSair').addEventListener('click', async () => {
+    if (!confirm('Sair deste aparelho?')) return;
+    try { await chamar('sair'); } catch (e) {}
+    gravarSessao(null); dlgF.close(); contas = []; render(); pedirSenha();
   });
 
   // ---------- Início ----------
   (async () => {
-    if (!lerSenha()) { pedirSenha(); return; }
-    try {
-      const r = await chamar('estado');
-      contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; render();
-    } catch (e) { if (lerSenha()) mostrarErro(e.message); }
+    const s = lerSessao();
+    if (!s) { pedirSenha(); return; }
+    $('cEmail').value = s.email || '';
+    try { aplicarEstado(await chamar('estado')); }
+    catch (e) { if (lerSessao()) mostrarErro(e.message); }
   })();
 </script>
 </body>
