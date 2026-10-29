@@ -1,0 +1,15 @@
+{
+  "name": "Meus Boletos",
+  "short_name": "Boletos",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5f4",
+  "theme_color": "#0f3d3e",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icone-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icone-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icone.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
