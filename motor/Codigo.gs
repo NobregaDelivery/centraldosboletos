@@ -325,7 +325,9 @@ function getFornecedores() {
 function estado(msg) {
   let caixas = [];
   try { caixas = getCaixas(); } catch (e) {}
-  return { contas: getContas(), fornecedores: getFornecedores(), caixas: caixas, msg: msg || '' };
+  let sugestoes = [];
+  try { sugestoes = getSugestoes(); } catch (e) {}
+  return { contas: getContas(), fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes, msg: msg || '' };
 }
 
 function adicionarFornecedor(f) {
@@ -441,7 +443,9 @@ const FUNCOES_API = {
   excluirConta:        (id) => excluirConta(id),
   getPdfs:             (id) => getPdfs(id),
   adicionarFornecedor: (f) => adicionarFornecedor(f),
-  removerFornecedor:   (email, assunto) => removerFornecedor(email, assunto)
+  removerFornecedor:   (email, assunto) => removerFornecedor(email, assunto),
+  aceitarSugestao:     (id, nome) => aceitarSugestao(id, nome),
+  ignorarSugestao:     (id) => ignorarSugestao(id)
 };
 const DIAS_SESSAO = 180;
 const MAX_TENTATIVAS = 5;
@@ -712,8 +716,114 @@ function buscarBoletosSemTrava() {
     contas.getRange(2, 1, n, CAB_CONTAS.length).sort({ column: 3, ascending: true });
   }
   registrarCaixa(novas.length);
+  try { buscarSugestoesSeHoje(); } catch (e) { console.warn('Sugestões: ' + e); }
   try { ss.toast(novas.length + ' boleto(s) novo(s) encontrado(s).', 'Boletos', 5); } catch (e) {}
   return novas.length;
+}
+
+// ===================== SUGESTÕES DE BOLETO PARA CADASTRO =====================
+// Uma vez por dia procura e-mails com cara de boleto vindos de remetentes que ainda
+// não são empresas cadastradas. Ficam na aba "Sugestões" até a pessoa adicionar ou ignorar.
+const ABA_SUG = 'Sugestões';
+const CAB_SUG = ['ID', 'E-mail do remetente', 'Nome', 'Assunto', 'Recebido em', 'Link', 'Conta', 'Status', 'Sinal'];
+
+function abaSugestoes() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_SUG);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_SUG);
+    aba.getRange(1, 1, 1, CAB_SUG.length).setValues([CAB_SUG]).setFontWeight('bold');
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+
+function buscarSugestoesSeHoje() {
+  const props = PropertiesService.getScriptProperties();
+  const ultima = Number(props.getProperty('SUG_ULTIMA') || 0);
+  if (Date.now() - ultima < 20 * 3600 * 1000) return 0;
+  const dias = ultima ? 3 : 30; // na primeira vez olha 30 dias para trás
+  const n = buscarSugestoes(dias);
+  props.setProperty('SUG_ULTIMA', String(Date.now()));
+  return n;
+}
+
+function buscarSugestoes(dias) {
+  const aba = abaSugestoes();
+  const conhecidos = new Set(getFornecedores().map(f => f.email.toLowerCase()));
+  const n = aba.getLastRow() - 1;
+  const linhas = n > 0 ? aba.getRange(2, 1, n, CAB_SUG.length).getValues() : [];
+  const jaVistos = new Set(linhas.map(r => String(r[1]).toLowerCase())); // um remetente só uma vez
+  const eu = minhaConta();
+
+  const q = 'newer_than:' + dias + 'd -category:promotions -category:social -in:chats -from:me ' +
+            '(subject:(boleto OR fatura OR cobrança OR "segunda via" OR "2ª via") OR filename:boleto OR filename:fatura OR "linha digitável")';
+  const novas = [];
+  GmailApp.search(q, 0, 40).forEach(th => {
+    th.getMessages().forEach(msg => {
+      const de = String(msg.getFrom());
+      const m = de.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/);
+      if (!m) return;
+      const email = m[0].toLowerCase();
+      if (email === eu || conhecidos.has(email) || jaVistos.has(email)) return;
+      const sinal = sinalDeBoleto(msg);
+      if (!sinal) return;
+      const nome = (de.replace(/<.*>/, '').replace(/"/g, '').trim()) || email.split('@')[1];
+      novas.push([msg.getId(), email, nome.slice(0, 60), msg.getSubject().slice(0, 120), msg.getDate(),
+                  'https://mail.google.com/mail/?authuser=' + encodeURIComponent(eu) + '#all/' + th.getId(),
+                  contaDestino(msg), 'nova', sinal]);
+      jaVistos.add(email);
+    });
+  });
+  novas.forEach(r => aba.appendRow(r));
+  return novas.length;
+}
+
+// Confere se o e-mail tem cara de boleto e diz por quê
+function sinalDeBoleto(msg) {
+  const assunto = String(msg.getSubject() || '');
+  let corpo = '';
+  try { corpo = String(msg.getPlainBody() || '').slice(0, 20000); } catch (e) {}
+  const d = extrairDados(corpo);
+  if (d.linha) return 'código de barras no e-mail';
+  let pdfs = [];
+  try { pdfs = msg.getAttachments().filter(a => /\.pdf$/i.test(a.getName()) || a.getContentType() === 'application/pdf'); } catch (e) {}
+  if (pdfs.some(a => /boleto|fatura|cobran/i.test(a.getName()))) return 'PDF de boleto anexo';
+  if (/boleto|fatura|cobran[cç]a|segunda via|2ª via/i.test(assunto) && (pdfs.length || d.pix || (d.valor && d.vencimento)))
+    return pdfs.length ? 'assunto de cobrança + PDF anexo' : 'assunto de cobrança com valor e vencimento';
+  return null;
+}
+
+function getSugestoes() {
+  const aba = planilha().getSheetByName(ABA_SUG);
+  if (!aba || aba.getLastRow() < 2) return [];
+  const tz = Session.getScriptTimeZone();
+  return aba.getRange(2, 1, aba.getLastRow() - 1, CAB_SUG.length).getValues()
+    .filter(r => r[0] && r[7] === 'nova')
+    .map(r => ({ id: String(r[0]), email: String(r[1]), nome: String(r[2]), assunto: String(r[3]),
+                 recebido: r[4] instanceof Date ? Utilities.formatDate(r[4], tz, 'yyyy-MM-dd') : '',
+                 link: String(r[5]), conta: String(r[6]), sinal: String(r[8]) }))
+    .sort((a, b) => a.recebido < b.recebido ? 1 : -1);
+}
+
+function marcarSugestao(id, status) {
+  const aba = planilha().getSheetByName(ABA_SUG);
+  if (!aba || aba.getLastRow() < 2) throw new Error('Sugestão não encontrada.');
+  const ids = aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues().map(r => String(r[0]));
+  const i = ids.indexOf(String(id));
+  if (i < 0) throw new Error('Sugestão não encontrada.');
+  aba.getRange(i + 2, 8).setValue(status);
+  return aba.getRange(i + 2, 1, 1, CAB_SUG.length).getValues()[0];
+}
+
+function aceitarSugestao(id, nome) {
+  const r = marcarSugestao(id, 'adicionada');
+  return adicionarFornecedor({ nome: String(nome || r[2]).trim() || String(r[1]), email: String(r[1]), assunto: '', dia: '' });
+}
+
+function ignorarSugestao(id) {
+  marcarSugestao(id, 'ignorada');
+  return estado('Sugestão ignorada');
 }
 
 // ===================== AVISOS DE DDA =====================

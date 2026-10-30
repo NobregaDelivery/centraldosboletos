@@ -169,6 +169,10 @@
   .guia { text-align: center; font-size: 14px; color: var(--muted); margin: 14px 0 0; }
   .guia a { color: var(--accent); }
   .refresh.ajuda { text-decoration: none; font-weight: 700; width: 36px; justify-content: center; padding: 8px 0; }
+  .card.sug { --c: var(--accent); border-left-style: dashed; }
+  .card.sug .badge { background: var(--ok-bg); color: var(--ok); }
+  .sug-info { margin: -4px 14px 10px; font-size: 13px; color: var(--muted); word-break: break-word; }
+  .sug-info a { color: var(--accent); }
   .sair { color: var(--muted) !important; font-size: 13px; background: none; border: 0; padding: 4px 18px 16px; text-decoration: underline; cursor: pointer; }
 </style>
 </head>
@@ -558,6 +562,21 @@
     </article>`;
   }
 
+  function sugHTML(s) {
+    return `
+    <article class="card sug" data-sug="${esc(s.id)}">
+      <div class="main-row" style="cursor:default">
+        <div class="who"><b>${esc(s.nome)}</b><span>${esc(s.email)} · ${esc(dataBR(s.recebido))}</span></div>
+        <div class="amount"><span class="badge">Sugestão</span></div>
+      </div>
+      <p class="sug-info">“${esc(s.assunto)}” · ${esc(s.sinal)}${s.link ? ` · <a href="${esc(s.link)}" target="_blank" rel="noopener">ver e-mail</a>` : ''}</p>
+      <div class="actions">
+        <button class="btn" data-sact="ign">Ignorar</button>
+        <button class="btn primary" data-sact="add">Adicionar empresa</button>
+      </div>
+    </article>`;
+  }
+
   function render() {
     resumo();
     let lista = contas.slice();
@@ -566,8 +585,10 @@
     const ord = (a, b) => (a.vencimento || '9999') < (b.vencimento || '9999') ? -1 : 1;
     lista.sort(filtro === 'pagos' ? (a, b) => -ord(a, b) : ord);
 
+    const blocoSug = filtro === 'pagos' || !sugestoes.length ? '' :
+      `<h2><span>Sugestões de boleto para cadastro</span><span>${sugestoes.length}</span></h2>` + sugestoes.map(sugHTML).join('');
     if (!lista.length) {
-      $('list').innerHTML = `<div class="empty">${filtro === 'pagos' ? 'Nenhuma conta marcada como paga ainda.' : 'Tudo em dia. Nenhuma conta a pagar.'}</div>`;
+      $('list').innerHTML = `<div class="empty">${filtro === 'pagos' ? 'Nenhuma conta marcada como paga ainda.' : 'Tudo em dia. Nenhuma conta a pagar.'}</div>` + blocoSug;
       return;
     }
     const aberto = c => c.status !== 'Pago', n = c => dias(c.vencimento);
@@ -575,17 +596,18 @@
       ['Vencidos', lista.filter(c => aberto(c) && n(c) !== null && n(c) < 0)],
       ['Próximos 7 dias', lista.filter(c => aberto(c) && n(c) !== null && n(c) >= 0 && n(c) <= 7)],
       ['Avisos do DDA (confira no banco)', lista.filter(c => aberto(c) && ehAviso(c))],
+      ['__SUG__', []],
       ['Mais adiante', lista.filter(c => aberto(c) && n(c) !== null && n(c) > 7)],
       ['Sem vencimento identificado', lista.filter(c => aberto(c) && n(c) === null && !ehAviso(c))],
       ['Pagos', lista.filter(c => !aberto(c))]
     ];
-    $('list').innerHTML = grupos.filter(g => g[1].length).map(([t, arr]) =>
+    $('list').innerHTML = grupos.filter(g => g[0] === '__SUG__' || g[1].length).map(([t, arr]) => t === '__SUG__' ? blocoSug :
       `<h2><span>${t}</span><span class="num">${brl(arr.reduce((s, c) => s + (c.valor || 0), 0))}</span></h2>` + arr.map(cardHTML).join('')
     ).join('');
     document.querySelectorAll('.card.open .qr[data-pix]').forEach(el => desenharQr(el, el.dataset.pix));
   }
 
-  let fornecedores = [], caixas = [];
+  let fornecedores = [], caixas = [], sugestoes = [];
   async function atualizar(fn, args, _sem_uso, espera) {
     try {
       const r = await Promise.race([
@@ -593,7 +615,7 @@
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), espera || 45000))
       ]);
       if (Array.isArray(r)) contas = r;
-      else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; renderForn(); if (r.msg) toast(r.msg); }
+      else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; sugestoes = r.sugestoes || sugestoes; renderForn(); if (r.msg) toast(r.msg); }
       render(); return true;
     } catch (e) {
       toast('Erro: ' + (e && e.message ? e.message : e)); return false;
@@ -610,6 +632,31 @@
     catch (e) { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
   }
 
+  // ---------- Pix automático: lê o QR Code dos PDFs sem precisar tocar em nada ----------
+  const CHAVE_PIX = 'central_boletos_pix_tentados';
+  function lerTentados() { try { return new Set(JSON.parse(localStorage.getItem(CHAVE_PIX) || '[]')); } catch (e) { return new Set(); } }
+  function gravarTentados(t) { try { localStorage.setItem(CHAVE_PIX, JSON.stringify([...t].slice(-500))); } catch (e) {} }
+  let autoPixRodando = false;
+  async function autoPix() {
+    if (autoPixRodando || !lerSessao()) return;
+    autoPixRodando = true;
+    const tentados = lerTentados();
+    const fila = contas.filter(c => c.status !== 'Pago' && !c.pix && !/^manual-/.test(c.id) &&
+                                    !/^aviso DDA/.test(c.origem || '') && !tentados.has(c.id)).slice(0, 5);
+    for (const c of fila) {
+      tentados.add(c.id); gravarTentados(tentados);
+      try {
+        const arquivos = await chamar('getPdfs', c.id);
+        if (!arquivos || !arquivos.length) continue;
+        const pix = await lerQrDePdfs(arquivos);
+        if (!pix) continue;
+        contas = await chamar('atualizarConta', c.id, { pix });
+        render(); toast('Pix encontrado: ' + c.fornecedor);
+      } catch (e) { /* PDF de outra conta, sem QR ou sem conexão: segue para o próximo */ }
+    }
+    autoPixRodando = false;
+  }
+
   async function processarPdfs(id, arquivos) {
     if (!arquivos || !arquivos.length) { toast('Esse e-mail não tem PDF anexo.'); return; }
     toast('Procurando QR Code no PDF…');
@@ -623,6 +670,17 @@
   }
 
   $('list').addEventListener('click', async ev => {
+    const sb = ev.target.closest('[data-sact]');
+    if (sb) {
+      const s = sugestoes.find(x => x.id === sb.closest('.card').dataset.sug);
+      if (!s) return;
+      if (sb.dataset.sact === 'ign') { sb.disabled = true; await atualizar('ignorarSugestao', [s.id]); return; }
+      const nome = (prompt('Nome da empresa (como vai aparecer no app):', s.nome) || '').trim();
+      if (!nome) return;
+      sb.disabled = true; sb.textContent = 'Adicionando e buscando boletos…';
+      await atualizar('aceitarSugestao', [s.id, nome], null, 180000);
+      return;
+    }
     const btn = ev.target.closest('[data-act]'); if (!btn) return;
     const card = btn.closest('.card'); const id = card.dataset.id;
     const c = contas.find(x => x.id === id);
@@ -681,6 +739,7 @@
     const b = $('refresh'); const antes = contas.length;
     b.disabled = true; b.classList.add('spin'); $('sub').textContent = 'Buscando no Gmail…';
     await atualizar('buscarAgora', [], null, 180000);
+    setTimeout(autoPix, 500);
     b.disabled = false; b.classList.remove('spin');
   });
 
@@ -771,7 +830,8 @@
 
   // ---------- Entrar / sair ----------
   function aplicarEstado(r) {
-    contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; render(); renderForn();
+    contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || []; render(); renderForn();
+    setTimeout(autoPix, 1500);
     const s = lerSessao(); $('quemSou').textContent = s ? 'Conectado como ' + s.email : '';
   }
   $('formConectar').addEventListener('submit', async ev => {
