@@ -31,7 +31,7 @@ const ABA_CONTAS = 'Contas';
 const ABA_FORN = 'Fornecedores';
 const CAB_CONTAS = ['Fornecedor', 'Recebido em', 'Vencimento', 'Valor', 'Linha digitável',
                     'Status', 'Assunto', 'Link do e-mail', 'Origem dos dados', 'ID',
-                    'Pix copia e cola', 'Observação', 'Conta que recebeu'];
+                    'Pix copia e cola', 'Observação', 'Conta que recebeu', 'Pago em'];
 const CAB_FORN = ['Nome', 'E-mail do remetente', 'Palavra no assunto (opcional)',
                   'Dia fixo de vencimento (opcional)'];
 
@@ -206,7 +206,8 @@ function getContas() {
       origem: String(r[8] || ''), id: String(r[9]),
       pix: String(r[10] || ''), obs: String(r[11] || ''),
       remetente: /^manual-/.test(String(r[9])) ? '' : (emailDe[String(r[0])] || ''),
-      conta: String(r[12] || '')
+      conta: String(r[12] || ''),
+      pagoEm: fmt(r[13])
     }));
 }
 
@@ -216,6 +217,7 @@ function garantirCabecalho(contas) {
     contas.getRange(1, 1, 1, CAB_CONTAS.length).setValues([CAB_CONTAS])
           .setFontWeight('bold').setBackground('#1f3b5c').setFontColor('#ffffff');
     contas.getRange('K2:M').setNumberFormat('@');
+    contas.getRange('N2:N').setNumberFormat('dd/mm/yyyy');
   }
 }
 
@@ -382,7 +384,7 @@ function adicionarManual(c) {
   const id = 'manual-' + Date.now();
 
   contas.appendRow([nome, new Date(), venc || '', valor || '', linha, 'A pagar', 'Adicionado no app', '',
-                    'adicionado manualmente', id, pix, String(c.obs || ''), '']);
+                    'adicionado manualmente', id, pix, String(c.obs || ''), '', '']);
   const n = contas.getLastRow() - 1;
   if (n > 1) contas.getRange(2, 1, n, CAB_CONTAS.length).sort({ column: 3, ascending: true });
   if (CONFIG.CRIAR_EVENTO_AGENDA && venc) criarLembrete(nome, { vencimento: venc, valor: valor, linha: linha });
@@ -393,6 +395,7 @@ function excluirConta(id) {
   const contas = planilha().getSheetByName(ABA_CONTAS);
   const l = linhaDaConta(contas, id);
   if (l < 0) throw new Error('Conta não encontrada.');
+  arquivarIds([String(id)]); // não volta a ser importado na próxima busca
   contas.deleteRow(l);
   return getContas();
 }
@@ -422,7 +425,10 @@ function atualizarConta(id, campos) {
     contas.getRange(linha, 11).setValue(pix);
   }
   if (campos.obs !== undefined) contas.getRange(linha, 12).setValue(String(campos.obs || ''));
-  if (campos.status) contas.getRange(linha, 6).setValue(campos.status);
+  if (campos.status) {
+    contas.getRange(linha, 6).setValue(campos.status);
+    contas.getRange(linha, 14).setValue(campos.status === 'Pago' ? new Date() : ''); // data em que foi marcado pago
+  }
   if (campos.vencimento !== undefined) {
     const p = String(campos.vencimento).split('-');
     contas.getRange(linha, 3).setValue(p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]) : '');
@@ -646,6 +652,7 @@ function buscarBoletosSemTrava() {
   const ultima = contas.getLastRow();
   const idsJaLidos = new Set(ultima > 1
     ? contas.getRange(2, 10, ultima - 1, 1).getValues().map(r => String(r[0])) : []);
+  lerIdsArquivados().forEach(i => idsJaLidos.add(i)); // pagos já apagados do histórico e contas excluídas
 
   const fornecedores = forn.getLastRow() > 1
     ? forn.getRange(2, 1, forn.getLastRow() - 1, 4).getValues().filter(r => r[0] && r[1]) : [];
@@ -670,7 +677,7 @@ function buscarBoletosSemTrava() {
                             '#all/' + msg.getThread().getId();
           novas.push([aviso.emissor, msg.getDate(), '', '', '', 'A pagar', msg.getSubject(), linkAviso,
                       'aviso DDA (' + aviso.banco + ')', id, '',
-                      'Confira valor e vencimento no app do ' + aviso.banco, contaDestino(msg)]);
+                      'Confira valor e vencimento no app do ' + aviso.banco, contaDestino(msg), '']);
           idsJaLidos.add(id);
           return;
         }
@@ -701,7 +708,7 @@ function buscarBoletosSemTrava() {
                      '#all/' + msg.getThread().getId();
         novas.push([nome, msg.getDate(), dados.vencimento || '', dados.valor || '',
                     dados.linha || '', 'A pagar', msg.getSubject(), link, origem, id,
-                    dados.pix || '', '', contaDestino(msg)]);
+                    dados.pix || '', '', contaDestino(msg), '']);
         idsJaLidos.add(id);
 
         if (CONFIG.CRIAR_EVENTO_AGENDA && dados.vencimento) criarLembrete(nome, dados);
@@ -717,8 +724,66 @@ function buscarBoletosSemTrava() {
   }
   registrarCaixa(novas.length);
   try { buscarSugestoesSeHoje(); } catch (e) { console.warn('Sugestões: ' + e); }
+  try { limparHistorico(); } catch (e) { console.warn('Histórico: ' + e); }
   try { ss.toast(novas.length + ' boleto(s) novo(s) encontrado(s).', 'Boletos', 5); } catch (e) {}
   return novas.length;
+}
+
+// ===================== HISTÓRICO DE PAGOS (30 DIAS) =====================
+// Contas marcadas como pagas ficam no histórico por 30 dias e depois são apagadas.
+// O ID do e-mail é guardado na aba "Arquivados" para o boleto não voltar na próxima busca.
+const DIAS_HISTORICO = 30;
+const ABA_ARQ = 'Arquivados';
+
+function abaArquivados() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_ARQ);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_ARQ);
+    aba.getRange(1, 1, 1, 2).setValues([['ID', 'Arquivado em']]).setFontWeight('bold');
+    aba.setFrozenRows(1);
+    try { aba.hideSheet(); } catch (e) {}
+  }
+  return aba;
+}
+
+function lerIdsArquivados() {
+  const aba = planilha().getSheetByName(ABA_ARQ);
+  if (!aba || aba.getLastRow() < 2) return [];
+  return aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues().map(r => String(r[0])).filter(Boolean);
+}
+
+function arquivarIds(ids) {
+  const reais = ids.filter(i => i && !/^manual-/.test(i));
+  if (!reais.length) return;
+  const aba = abaArquivados();
+  aba.getRange(aba.getLastRow() + 1, 1, reais.length, 2).setValues(reais.map(i => [i, new Date()]));
+}
+
+function limparHistorico() {
+  if (CONFIG.PLANILHA_PRINCIPAL) return; // só a conta principal faz a limpeza
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  const n = contas.getLastRow() - 1;
+  if (n < 1) return 0;
+  const vals = contas.getRange(2, 1, n, CAB_CONTAS.length).getValues();
+  const limite = Date.now() - DIAS_HISTORICO * 864e5;
+  const apagar = [];
+  vals.forEach((r, i) => {
+    if (r[5] !== 'Pago') return;
+    if (!(r[13] instanceof Date)) { contas.getRange(i + 2, 14).setValue(new Date()); return; } // pagos antigos: conta a partir de hoje
+    if (r[13].getTime() < limite) apagar.push(i + 2);
+  });
+  if (!apagar.length) return 0;
+  arquivarIds(apagar.map(l => String(vals[l - 2][9])));
+  apagar.reverse().forEach(l => contas.deleteRow(l));
+  // IDs arquivados há mais de 120 dias já estão fora da janela de busca: pode limpar
+  const arq = planilha().getSheetByName(ABA_ARQ);
+  if (arq && arq.getLastRow() > 1) {
+    const datas = arq.getRange(2, 2, arq.getLastRow() - 1, 1).getValues();
+    for (let i = datas.length - 1; i >= 0; i--)
+      if (datas[i][0] instanceof Date && datas[i][0].getTime() < Date.now() - 120 * 864e5) arq.deleteRow(i + 2);
+  }
+  return apagar.length;
 }
 
 // ===================== SUGESTÕES DE BOLETO PARA CADASTRO =====================
