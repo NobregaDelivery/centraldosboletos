@@ -771,6 +771,7 @@
     </article>`;
   }
   const fmtDoc = d => { d = String(d).replace(/\D/g, '');
+    if (d.length === 12 || d.length === 13) d = d.padStart(14, '0'); else if (d.length === 9 || d.length === 10) d = d.padStart(11, '0');
     return d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5')
          : d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : d; };
   function renderXml() {
