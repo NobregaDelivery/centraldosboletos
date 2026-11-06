@@ -748,6 +748,7 @@
     xmlCarregando = false;
     if (filtro === 'xml') renderXml();
   }
+  const nomeDoRemetente = e => { const f = fornecedores.find(f => f.email.toLowerCase() === String(e || '').toLowerCase()); return f ? f.nome : ''; };
   function xmlHTML(x, canceladas) {
     const evento = /^Evento/.test(x.tipo);
     const cancelada = !evento && x.chave && canceladas.has(x.chave);
@@ -757,7 +758,7 @@
     return `
     <article class="card xml ${cancelada ? 'late' : evento ? 'soon' : 'later'}" data-xml="${esc(x.id)}">
       <div class="main-row">
-        <div class="who"><b>${esc(x.emitente || x.remetente || x.arquivo)}</b>
+        <div class="who"><b>${esc(x.emitente || nomeDoRemetente(x.remetente) || x.remetente || x.arquivo)}</b>
           <span>${esc(desc)} · ${esc(quando)}${x.cnpj ? '<br>CNPJ ' + esc(fmtDoc(x.cnpj)) : ''}</span></div>
         <div class="amount"><b class="num">${x.valor != null ? brl(x.valor) : ''}</b>
           <span class="badge">${cancelada ? 'Cancelada' : esc(evento ? 'Evento' : x.tipo)}</span></div>
