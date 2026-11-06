@@ -454,7 +454,7 @@ const FUNCOES_API = {
   ignorarSugestao:     (id) => ignorarSugestao(id),
   getXmls:             () => getXmls(),
   getXml:              (id) => getXml(id),
-  buscarXmlsAgora:     () => { const n = buscarXmls(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
+  buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
 };
 const DIAS_SESSAO = 180;
 const MAX_TENTATIVAS = 5;
@@ -1191,9 +1191,46 @@ function abaXmlArq() {
 function buscarXmlsDaRodada() {
   const props = PropertiesService.getScriptProperties();
   const primeira = !props.getProperty('XML_INICIO');
-  const n = buscarXmls(primeira ? XML_DIAS_INICIO : XML_DIAS_ROTINA);
+  const n = buscarXmlsComTrava(primeira ? XML_DIAS_INICIO : XML_DIAS_ROTINA);
   props.setProperty('XML_INICIO', String(Date.now()));
   return n;
+}
+
+// Uma busca de XML por vez (contas diferentes gravam na mesma planilha)
+function buscarXmlsComTrava(dias) {
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(150000)) return 0;
+  try { removerXmlsRepetidos(); try { relerXmlsSemDados(); } catch (e) { console.warn(e); } return buscarXmls(dias); } finally { lock.releaseLock(); }
+}
+
+function removerXmlsRepetidos() {
+  [abaXml(), abaXmlArq()].forEach(aba => {
+    const n = aba.getLastRow() - 1;
+    if (n < 2) return;
+    const ids = aba.getRange(2, 1, n, 1).getValues().map(r => String(r[0]));
+    const vistos = new Set(), apagar = [];
+    ids.forEach((id, i) => { if (vistos.has(id)) apagar.push(i + 2); else vistos.add(id); });
+    apagar.reverse().forEach(l => aba.deleteRow(l));
+  });
+}
+
+// Lê de novo os XMLs que ficaram sem dados (formatos que o app aprendeu depois)
+function relerXmlsSemDados() {
+  const aba = abaXml(), arq = abaXmlArq();
+  const n = aba.getLastRow() - 1, na = arq.getLastRow() - 1;
+  if (n < 1 || na < 1) return;
+  const linhas = aba.getRange(2, 1, n, 10).getValues();
+  const ids = arq.getRange(2, 1, na, 1).getValues().map(r => String(r[0]));
+  linhas.forEach((r, i) => {
+    if (String(r[2]) !== 'XML') return;
+    const j = ids.indexOf(String(r[0]));
+    if (j < 0) return;
+    const texto = arq.getRange(j + 2, 2, 1, Math.max(1, arq.getLastColumn() - 1)).getValues()[0].join('');
+    const d = lerXmlFiscal(texto);
+    if (d.tipo === 'XML') return;
+    aba.getRange(i + 2, 3, 1, 8).setValues([[d.tipo, d.numero, d.emitente || r[4], d.cnpjEmit, d.destinatario,
+      d.valor === null ? '' : d.valor, d.emissao || '', d.chave]]);
+  });
 }
 
 function buscarXmls(dias) {
@@ -1228,7 +1265,8 @@ function buscarXmls(dias) {
         const de = String(msg.getFrom());
         let linkDrive = '';
         try { linkDrive = salvarXmlNoDrive(a.copyBlob(), d, msg.getDate()); } catch (e) { console.warn('Drive XML: ' + e); }
-        novas.push([id, msg.getDate(), d.tipo, d.numero, d.emitente || de.replace(/<.*>/, '').replace(/"/g, '').trim(),
+        const emailDe = (de.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/) || [''])[0].toLowerCase();
+        novas.push([id, msg.getDate(), d.tipo, d.numero, d.emitente || de.replace(/<.*>/, '').replace(/"/g, '').trim() || emailDe,
                     d.cnpjEmit, d.destinatario, d.valor === null ? '' : d.valor, d.emissao || '', d.chave,
                     nomeArq, (de.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/) || [''])[0].toLowerCase(),
                     String(msg.getSubject() || '').slice(0, 150),
@@ -1335,6 +1373,19 @@ function lerXmlFiscal(texto) {
     r.valor = num(txt('ValorLiquidoNfse', inf)) ?? num(txt('ValorServicos', inf));
     r.emissao = data(txt('DataEmissao', inf) || txt('DataEmissaoNfse', inf));
     r.chave = txt('CodigoVerificacao', inf) ? 'NFSe-' + r.cnpjEmit + '-' + r.numero : '';
+  } else if (tem('InfDeclaracaoPrestacaoServico') || tem('InfRps')) { // RPS (pedido de NFS-e) em lote
+    const inf = achar('InfDeclaracaoPrestacaoServico') || achar('InfRps');
+    r.tipo = 'RPS (NFS-e)';
+    const idRps = achar('IdentificacaoRps', inf);
+    r.numero = idRps ? txt('Numero', idRps) + (txt('Serie', idRps) ? ' / série ' + txt('Serie', idRps) : '') : '';
+    const prest = achar('Prestador', inf) || achar('Prestador') || achar('PrestadorServico', inf);
+    const toma = achar('TomadorServico', inf) || achar('Tomador', inf);
+    r.emitente = prest ? (txt('RazaoSocial', prest) || txt('NomeFantasia', prest)) : '';
+    r.cnpjEmit = doc(prest);
+    r.destinatario = toma ? txt('RazaoSocial', toma) : '';
+    r.valor = num(txt('ValorServicos', inf));
+    r.emissao = data(txt('DataEmissao', inf) || txt('Competencia', inf));
+    r.chave = r.cnpjEmit && r.numero ? 'RPS-' + r.cnpjEmit + '-' + r.numero : '';
   } else if (tem('infEvento')) {                         // cancelamento, carta de correção etc.
     const inf = achar('infEvento');
     const desc = txt('descEvento', inf) || txt('xEvento', inf) || 'Evento';
