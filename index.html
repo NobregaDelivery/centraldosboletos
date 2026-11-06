@@ -166,6 +166,9 @@
   .conectar input { font: inherit; width: 100%; padding: 12px; border-radius: 10px;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 10px; }
   .conectar .btn { width: 100%; padding: 12px; }
+  .conectar .box[hidden] { display: none; }
+  .links-senha { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  .link { background: none; border: 0; padding: 4px 0; color: var(--accent); font: inherit; font-size: 14px; cursor: pointer; text-decoration: underline; }
   .conectar .erro { color: var(--late); font-size: 13px; min-height: 1.2em; margin-bottom: 8px; }
   .guia { text-align: center; font-size: 14px; color: var(--muted); margin: 14px 0 0; }
   .guia a { color: var(--accent); }
@@ -320,7 +323,43 @@
     <input id="cSenha" type="password" autocomplete="current-password" placeholder="Sua senha" required>
     <div class="erro" id="cErro"></div>
     <button class="btn primary" type="submit" id="cBtn">Entrar</button>
+    <div class="links-senha">
+      <button type="button" class="link" data-tela="esqueci">Esqueci a senha</button>
+      <button type="button" class="link" data-tela="trocar">Trocar senha</button>
+    </div>
     <p class="guia">Primeira vez? <a href="instalar.html">Veja como instalar a sua Central</a></p>
+  </form>
+
+  <form class="box" id="formTrocar" hidden>
+    <h2>Trocar senha</h2>
+    <p>Depois de trocar, os outros aparelhos conectados vão pedir a senha nova.</p>
+    <input id="tEmail" type="email" autocomplete="username" placeholder="Seu e-mail" required>
+    <input id="tAtual" type="password" autocomplete="current-password" placeholder="Senha atual" required>
+    <input id="tNova" type="password" autocomplete="new-password" placeholder="Nova senha (mínimo 8 caracteres)" minlength="8" required>
+    <input id="tNova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha" minlength="8" required>
+    <div class="erro" id="tErro"></div>
+    <button class="btn primary" type="submit" id="tBtn">Trocar senha e entrar</button>
+    <div class="links-senha"><button type="button" class="link" data-tela="entrar">Voltar para o login</button></div>
+  </form>
+
+  <form class="box" id="formEsqueci" hidden>
+    <h2>Esqueci a senha</h2>
+    <div id="eP1">
+      <p>Digite o e-mail da sua conta. Vamos mandar um código de 6 números para esse mesmo e-mail.</p>
+      <input id="eEmail" type="email" autocomplete="username" placeholder="Seu e-mail">
+    </div>
+    <div id="eP2" hidden>
+      <p id="eMsg"></p>
+      <input id="eCodigo" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="Código de 6 números">
+      <input id="eNova" type="password" autocomplete="new-password" placeholder="Nova senha (mínimo 8 caracteres)" minlength="8">
+      <input id="eNova2" type="password" autocomplete="new-password" placeholder="Repita a nova senha" minlength="8">
+    </div>
+    <div class="erro" id="eErro"></div>
+    <button class="btn primary" type="submit" id="eBtn">Enviar código</button>
+    <div class="links-senha">
+      <button type="button" class="link" id="eReenviar" hidden>Mandar outro código</button>
+      <button type="button" class="link" data-tela="entrar">Voltar para o login</button>
+    </div>
   </form>
 </div>
 
@@ -524,20 +563,29 @@
     return r.dados;
   }
 
-  async function entrar(email, senha) {
+  async function urlDoMotor(email) {
     let mapa;
     try { mapa = await (await fetch(DIRETORIO + '?v=' + Date.now(), { cache: 'no-store' })).json(); }
     catch (e) { throw new Error('Não consegui carregar a lista de usuários. Tente de novo.'); }
-    const url = mapa[await hashEmail(email)];
-    if (!url) throw new Error('E-mail ou senha incorretos.');
-    const aparelho = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-    const r = await postar(url, { acao: 'login', email, senha, aparelho });
-    if (!r.ok) throw new Error(r.mensagem || 'Não foi possível entrar.');
-    gravarSessao({ url, token: r.dados.token, email: r.dados.email });
+    return mapa[await hashEmail(email)] || null;
+  }
+  const aparelhoAtual = () => (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  // Ações sem sessão (login, trocar e redefinir senha); as que devolvem token já deixam o aparelho conectado
+  async function acaoConta(email, dados, msgSemMotor) {
+    const url = await urlDoMotor(email);
+    if (!url) throw new Error(msgSemMotor);
+    const r = await postar(url, Object.assign({ email, aparelho: aparelhoAtual() }, dados));
+    if (!r.ok) throw new Error(r.mensagem || 'Não foi possível concluir.');
+    if (r.dados && r.dados.token) gravarSessao({ url, token: r.dados.token, email: r.dados.email });
+    return r.dados;
+  }
+  async function entrar(email, senha) {
+    await acaoConta(email, { acao: 'login', senha }, 'E-mail ou senha incorretos.');
   }
 
   function pedirSenha(msg) {
     $('cErro').textContent = msg || '';
+    $('formConectar').hidden = false; $('formTrocar').hidden = true; $('formEsqueci').hidden = true;
     $('conectar').classList.add('show');
     setTimeout(() => ($('cEmail').value ? $('cSenha') : $('cEmail')).focus(), 50);
   }
@@ -1009,6 +1057,71 @@
     } catch (e) { $('cErro').textContent = e.message; }
     b.disabled = false; b.textContent = 'Entrar';
   });
+  // ---------- Esqueci / trocar senha ----------
+  function mostrarTela(qual) {
+    $('formConectar').hidden = qual !== 'entrar';
+    $('formTrocar').hidden = qual !== 'trocar';
+    $('formEsqueci').hidden = qual !== 'esqueci';
+    ['cErro', 'tErro', 'eErro'].forEach(i => $(i).textContent = '');
+    const email = $('cEmail').value.trim();
+    if (qual === 'trocar') { $('tEmail').value = email; ($('tEmail').value ? $('tAtual') : $('tEmail')).focus(); }
+    if (qual === 'esqueci') { $('eEmail').value = email; $('eP1').hidden = false; $('eP2').hidden = true;
+      $('eReenviar').hidden = true; $('eBtn').textContent = 'Enviar código'; $('eEmail').focus(); }
+    if (qual === 'entrar') setTimeout(() => ($('cEmail').value ? $('cSenha') : $('cEmail')).focus(), 50);
+  }
+  document.querySelectorAll('[data-tela]').forEach(b => b.addEventListener('click', () => mostrarTela(b.dataset.tela)));
+  async function entrouComSenhaNova(msg) {
+    ['tAtual', 'tNova', 'tNova2', 'eCodigo', 'eNova', 'eNova2', 'cSenha'].forEach(i => $(i).value = '');
+    $('cEmail').value = lerSessao().email;
+    mostrarTela('entrar');
+    $('conectar').classList.remove('show');
+    toast(msg);
+    aplicarEstado(await chamar('estado'));
+  }
+  $('formTrocar').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const email = $('tEmail').value.trim(), atual = $('tAtual').value, nova = $('tNova').value;
+    if (nova.length < 8) { $('tErro').textContent = 'A nova senha precisa ter pelo menos 8 caracteres.'; return; }
+    if (nova !== $('tNova2').value) { $('tErro').textContent = 'As duas senhas novas não são iguais.'; return; }
+    const b = $('tBtn'); b.disabled = true; b.textContent = 'Trocando…'; $('tErro').textContent = '';
+    try {
+      await acaoConta(email, { acao: 'trocarSenha', senha: atual, novaSenha: nova }, 'E-mail ou senha incorretos.');
+      await entrouComSenhaNova('Senha trocada. Os outros aparelhos vão pedir a senha nova.');
+    } catch (e) { $('tErro').textContent = e.message; }
+    b.disabled = false; b.textContent = 'Trocar senha e entrar';
+  });
+  async function pedirCodigo() {
+    const email = $('eEmail').value.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) { $('eErro').textContent = 'Digite o e-mail da sua conta.'; return; }
+    const b = $('eBtn'); b.disabled = true; b.textContent = 'Enviando…'; $('eErro').textContent = '';
+    try {
+      const url = await urlDoMotor(email);
+      if (url) {
+        const r = await postar(url, { acao: 'esqueci', email });
+        if (!r.ok) throw new Error(r.mensagem || 'Não consegui enviar o código.');
+      }
+      $('eMsg').innerHTML = 'Se <b>' + esc(email) + '</b> tiver uma Central, o código chegou nesse e-mail agora (confira também o spam). Ele vale por 15 minutos.';
+      $('eP1').hidden = true; $('eP2').hidden = false; $('eReenviar').hidden = false;
+      b.textContent = 'Criar nova senha e entrar'; $('eCodigo').focus();
+    } catch (e) { $('eErro').textContent = e.message; b.textContent = $('eP2').hidden ? 'Enviar código' : 'Criar nova senha e entrar'; }
+    b.disabled = false;
+  }
+  $('eReenviar').addEventListener('click', pedirCodigo);
+  $('formEsqueci').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    if (!$('eP1').hidden) { pedirCodigo(); return; }
+    const email = $('eEmail').value.trim(), codigo = $('eCodigo').value.replace(/\D/g, ''), nova = $('eNova').value;
+    if (codigo.length !== 6) { $('eErro').textContent = 'O código tem 6 números.'; return; }
+    if (nova.length < 8) { $('eErro').textContent = 'A nova senha precisa ter pelo menos 8 caracteres.'; return; }
+    if (nova !== $('eNova2').value) { $('eErro').textContent = 'As duas senhas novas não são iguais.'; return; }
+    const b = $('eBtn'); b.disabled = true; b.textContent = 'Salvando…'; $('eErro').textContent = '';
+    try {
+      await acaoConta(email, { acao: 'redefinir', codigo, novaSenha: nova }, 'Código incorreto ou vencido. Peça um novo código.');
+      await entrouComSenhaNova('Nova senha criada. Os outros aparelhos vão pedir a senha nova.');
+    } catch (e) { $('eErro').textContent = e.message; }
+    b.disabled = false; b.textContent = 'Criar nova senha e entrar';
+  });
+
   async function sairDaConta() {
     if (!confirm('Sair da sua conta neste aparelho?')) return;
     try { await chamar('sair'); } catch (e) {}

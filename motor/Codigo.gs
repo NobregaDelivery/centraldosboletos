@@ -465,6 +465,12 @@ function doPost(e) {
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (req.acao === 'login') {
       resposta = { ok: true, dados: fazerLogin(req.email, req.senha, req.aparelho) };
+    } else if (req.acao === 'trocarSenha') {
+      resposta = { ok: true, dados: trocarSenha(req.email, req.senha, req.novaSenha, req.aparelho) };
+    } else if (req.acao === 'esqueci') {
+      resposta = { ok: true, dados: enviarCodigoSenha(req.email) };
+    } else if (req.acao === 'redefinir') {
+      resposta = { ok: true, dados: redefinirSenha(req.email, req.codigo, req.novaSenha, req.aparelho) };
     } else {
       const sessao = validarSessao(req.token);
       if (!sessao) {
@@ -492,10 +498,15 @@ function fazerLogin(email, senha, aparelho) {
   const cad = JSON.parse(props.getProperty('LOGIN') || 'null');
   if (!cad) throw erro('login', 'Este app ainda não tem login criado. Na planilha, use o menu 💰 Boletos → Criar ou alterar meu login.');
 
+  conferirSenha(cad, email, senha);
+  return criarSessao(cad, aparelho);
+}
+
+// Confere e-mail e senha, com bloqueio de 15 min depois de 5 erros
+function conferirSenha(cad, email, senha) {
   const cache = CacheService.getScriptCache();
   const falhas = Number(cache.get('falhas_login') || 0);
   if (falhas >= MAX_TENTATIVAS) throw erro('bloqueado', 'Muitas tentativas erradas. Aguarde 15 minutos e tente de novo.');
-
   const okEmail = String(email || '').trim().toLowerCase() === cad.email;
   const okSenha = iguais(hashSenha(String(senha || ''), cad.sal), cad.hash);
   if (!okEmail || !okSenha) {
@@ -504,13 +515,84 @@ function fazerLogin(email, senha, aparelho) {
     throw erro('login', 'E-mail ou senha incorretos.');
   }
   cache.remove('falhas_login');
+}
 
+function criarSessao(cad, aparelho) {
   const token = gerarAleatorio(40);
   const sessoes = lerSessoes();
   sessoes[sha256(token)] = { exp: Date.now() + DIAS_SESSAO * 864e5, criada: Date.now(),
                              aparelho: String(aparelho || '').slice(0, 60) };
   gravarSessoes(sessoes);
   return { token: token, email: cad.email };
+}
+
+function lerCadastro() {
+  const cad = JSON.parse(PropertiesService.getScriptProperties().getProperty('LOGIN') || 'null');
+  if (!cad) throw erro('login', 'Este app ainda não tem login criado. Na planilha, use o menu 💰 Boletos → Criar ou alterar meu login.');
+  return cad;
+}
+
+// Grava a nova senha e desconecta todos os aparelhos (o atual recebe uma sessão nova)
+function gravarNovaSenha(cad, nova) {
+  nova = String(nova || '');
+  if (nova.length < 8) throw erro('senha', 'A nova senha precisa ter pelo menos 8 caracteres.');
+  const sal = gerarAleatorio(24);
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('LOGIN', JSON.stringify({ email: cad.email, sal: sal, hash: hashSenha(nova, sal) }));
+  props.deleteProperty('SESSOES');
+  return { email: cad.email, sal: sal };
+}
+
+// ---------- Trocar senha (sabendo a atual) ----------
+function trocarSenha(email, atual, nova, aparelho) {
+  const cad = lerCadastro();
+  conferirSenha(cad, email, atual);
+  if (String(nova || '') === String(atual || '')) throw erro('senha', 'A nova senha precisa ser diferente da atual.');
+  gravarNovaSenha(cad, nova);
+  return criarSessao(cad, aparelho);
+}
+
+// ---------- Esqueci a senha: código de 6 números enviado para o próprio Gmail ----------
+const MINUTOS_CODIGO = 15;
+function enviarCodigoSenha(email) {
+  const cad = lerCadastro();
+  // Resposta igual para e-mail certo ou errado, para não revelar quem está cadastrado
+  if (String(email || '').trim().toLowerCase() !== cad.email) { Utilities.sleep(800); return true; }
+  const cache = CacheService.getScriptCache();
+  if (cache.get('codigo_enviado_ha_pouco')) throw erro('espera', 'Já enviamos um código há menos de 1 minuto. Confira seu e-mail (e o spam) ou tente de novo daqui a pouco.');
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Date.now() + Math.random());
+  const codigo = String(((bytes[0] & 0xff) * 65536 + (bytes[1] & 0xff) * 256 + (bytes[2] & 0xff)) % 1000000).padStart(6, '0');
+  cache.put('codigo_senha', JSON.stringify({ h: sha256('cod:' + codigo), t: 0 }), MINUTOS_CODIGO * 60);
+  cache.put('codigo_enviado_ha_pouco', '1', 60);
+  MailApp.sendEmail({
+    to: cad.email,
+    subject: 'Código para criar nova senha - Central dos Boletos',
+    htmlBody: '<div style="font-family:Arial,sans-serif;font-size:15px;color:#14201f">' +
+      '<p>Alguém (provavelmente você) pediu para criar uma nova senha na Central dos Boletos.</p>' +
+      '<p>Seu código é:</p><p style="font-size:32px;font-weight:bold;letter-spacing:6px;margin:8px 0">' + codigo + '</p>' +
+      '<p>Ele vale por ' + MINUTOS_CODIGO + ' minutos. Se não foi você, ignore este e-mail: sua senha continua a mesma.</p></div>',
+    body: 'Seu código para criar nova senha na Central dos Boletos: ' + codigo + ' (vale por ' + MINUTOS_CODIGO + ' minutos). Se não foi você, ignore este e-mail.'
+  });
+  return true;
+}
+
+function redefinirSenha(email, codigo, nova, aparelho) {
+  const cad = lerCadastro();
+  const cache = CacheService.getScriptCache();
+  const salvo = JSON.parse(cache.get('codigo_senha') || 'null');
+  const invalido = () => erro('codigo', 'Código incorreto ou vencido. Peça um novo código.');
+  if (!salvo || String(email || '').trim().toLowerCase() !== cad.email) { Utilities.sleep(1000); throw invalido(); }
+  if (!iguais(sha256('cod:' + String(codigo || '').replace(/\D/g, '')), salvo.h)) {
+    salvo.t++;
+    if (salvo.t >= MAX_TENTATIVAS) cache.remove('codigo_senha');
+    else cache.put('codigo_senha', JSON.stringify(salvo), MINUTOS_CODIGO * 60);
+    Utilities.sleep(1000);
+    throw invalido();
+  }
+  gravarNovaSenha(cad, nova); // valida o tamanho antes de gastar o código
+  cache.remove('codigo_senha');
+  cache.remove('falhas_login');
+  return criarSessao(cad, aparelho);
 }
 
 function validarSessao(token) {
