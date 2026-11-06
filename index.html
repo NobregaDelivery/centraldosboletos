@@ -172,6 +172,14 @@
   .refresh.ajuda { text-decoration: none; font-weight: 700; width: 36px; justify-content: center; padding: 8px 0; }
   .card.sug { --c: var(--accent); border-left-style: dashed; }
   .btn.ampliar { margin-top: 8px; flex: none; padding: 7px 12px; font-size: 13px; }
+  .xml-topo { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .xml-topo input { flex: 1 1 200px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    background: var(--card); color: var(--ink); font: inherit; }
+  .xml-topo .btn { flex: 0 0 auto; }
+  .card.xml .who span { display: block; }
+  .card.xml .actions .btn { white-space: nowrap; font-size: 13px; padding: 9px 6px; min-width: 0; }
+  body.modo-xml .fab { display: none; }
+  a.btn { text-decoration: none; }
   .hist-nota { font-size: 13px; color: var(--muted); margin: 16px 4px 0; }
   dialog.qrfull { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; margin: 0; border-radius: 0;
     background: #ffffff; color: #14201f; padding: 0; }
@@ -225,6 +233,7 @@
   <nav class="tabs" role="group" aria-label="Filtro">
     <button class="tab" data-f="abertos" aria-pressed="true">A pagar</button>
     <button class="tab" data-f="pagos" aria-pressed="false">Histórico de pagos</button>
+    <button class="tab" data-f="xml" aria-pressed="false">Notas XML</button>
   </nav>
 
   <div id="list">
@@ -544,6 +553,7 @@
     $('sub').textContent = 'Atualizado ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   }
 
+  const ICON_DOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>';
   const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
   const ICON_PIX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5l4 4-4 4-4-4z M12 13.5l4 4-4 4-4-4z M2.5 12l4-4 4 4-4 4z M13.5 12l4-4 4 4-4 4z"/></svg>';
   const ICON_OK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg>';
@@ -613,6 +623,8 @@
 
   function render() {
     resumo();
+    document.body.classList.toggle('modo-xml', filtro === 'xml');
+    if (filtro === 'xml') { renderXml(); return; }
     let lista = contas.slice();
     if (filtro === 'abertos') lista = lista.filter(c => c.status !== 'Pago');
     if (filtro === 'pagos') lista = lista.filter(c => c.status === 'Pago');
@@ -725,7 +737,97 @@
     } catch (e) { toast('Erro ao ler o PDF: ' + e.message); }
   }
 
+  // ---------- Notas fiscais em XML ----------
+  let xmls = null, xmlBusca = '', xmlCarregando = false;
+  const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  async function carregarXmls(forcar) {
+    if (xmlCarregando || (xmls && !forcar)) return;
+    xmlCarregando = true;
+    try { xmls = await chamar('getXmls'); }
+    catch (e) { if (!xmls) { xmls = []; toast(e.message); } }
+    xmlCarregando = false;
+    if (filtro === 'xml') renderXml();
+  }
+  function xmlHTML(x, canceladas) {
+    const evento = /^Evento/.test(x.tipo);
+    const cancelada = !evento && x.chave && canceladas.has(x.chave);
+    const quando = x.emissao ? 'emitida ' + dataBR(x.emissao) : 'recebida ' + dataBR(x.recebido);
+    const desc = evento ? x.tipo.replace('Evento: ', '') + (x.numero ? ' da nota nº ' + x.numero : '')
+               : x.tipo + (x.numero ? ' nº ' + x.numero : '');
+    return `
+    <article class="card xml ${cancelada ? 'late' : evento ? 'soon' : 'later'}" data-xml="${esc(x.id)}">
+      <div class="main-row">
+        <div class="who"><b>${esc(x.emitente || x.remetente || x.arquivo)}</b>
+          <span>${esc(desc)} · ${esc(quando)}${x.cnpj ? '<br>CNPJ ' + esc(fmtDoc(x.cnpj)) : ''}</span></div>
+        <div class="amount"><b class="num">${x.valor != null ? brl(x.valor) : ''}</b>
+          <span class="badge">${cancelada ? 'Cancelada' : esc(evento ? 'Evento' : x.tipo)}</span></div>
+      </div>
+      <div class="actions">
+        <button class="btn" data-xact="baixar">${ICON_DOWN}Baixar XML</button>
+        ${/^\d{44}$/.test(x.chave) ? `<button class="btn" data-xact="chave">${ICON_COPY}Copiar chave</button>` : ''}
+        ${x.link ? `<a class="btn" href="${esc(x.link)}" target="_blank" rel="noopener">Abrir e-mail</a>` : ''}
+      </div>
+    </article>`;
+  }
+  const fmtDoc = d => { d = String(d).replace(/\D/g, '');
+    return d.length === 14 ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5')
+         : d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : d; };
+  function renderXml() {
+    const topo = `<div class="xml-topo">
+        <input type="search" id="xmlBusca" placeholder="Buscar por empresa, número ou CNPJ" value="${esc(xmlBusca)}" aria-label="Buscar notas">
+        <button class="btn" type="button" id="xmlAgora">Buscar XMLs agora</button>
+      </div>`;
+    if (!xmls) {
+      $('list').innerHTML = topo + '<div class="skeleton"></div><div class="skeleton"></div>';
+      ligarTopoXml(); carregarXmls(); return;
+    }
+    const canceladas = new Set(xmls.filter(x => /^Evento/.test(x.tipo) && /cancel/i.test(x.tipo)).map(x => x.chave));
+    const t = xmlBusca.trim().toLowerCase(), td = t.replace(/\D/g, '');
+    const lista = xmls.filter(x => !t || [x.emitente, x.remetente, x.numero, x.tipo, x.arquivo, x.destinatario].join(' ').toLowerCase().includes(t)
+                                          || (td.length >= 3 && (x.cnpj + x.chave).includes(td)));
+    const nota = '<p class="hist-nota">Aqui aparecem os arquivos XML (NF-e, NFS-e, CT-e…) que chegaram nos seus e-mails. Cada um também é guardado no seu Google Drive, na pasta <b>Central dos Boletos - XMLs</b>, separado por mês.</p>';
+    if (!lista.length) {
+      $('list').innerHTML = topo + `<div class="empty">${t ? 'Nenhuma nota encontrada para essa busca.' : 'Nenhum XML encontrado nos últimos 90 dias ainda. Use <b>Buscar XMLs agora</b>.'}</div>` + nota;
+      ligarTopoXml(); return;
+    }
+    const grupos = {};
+    lista.forEach(x => { const k = (x.emissao || x.recebido || '').slice(0, 7) || 'sem data'; (grupos[k] = grupos[k] || []).push(x); });
+    $('list').innerHTML = topo + nota + Object.keys(grupos).sort().reverse().map(k => {
+      const arr = grupos[k];
+      const tot = arr.filter(x => x.valor != null && !/^Evento/.test(x.tipo) && !canceladas.has(x.chave)).reduce((s, x) => s + x.valor, 0);
+      const nome = k === 'sem data' ? 'Sem data' : MESES[+k.slice(5, 7) - 1] + ' de ' + k.slice(0, 4);
+      return `<h2><span>${nome} · ${arr.length} nota(s)</span><span class="num">${brl(tot)}</span></h2>` + arr.map(x => xmlHTML(x, canceladas)).join('');
+    }).join('');
+    ligarTopoXml();
+  }
+  function ligarTopoXml() {
+    const b = $('xmlBusca');
+    b.addEventListener('input', () => { xmlBusca = b.value; const pos = b.selectionStart; renderXml(); const n = $('xmlBusca'); n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} });
+    $('xmlAgora').addEventListener('click', async () => {
+      const bt = $('xmlAgora'); bt.disabled = true; bt.textContent = 'Procurando nos e-mails…';
+      try { const r = await chamar('buscarXmlsAgora'); xmls = r.xmls; toast(r.msg); }
+      catch (e) { toast(e.message); }
+      if (filtro === 'xml') renderXml();
+    });
+  }
+
   $('list').addEventListener('click', async ev => {
+    const xb = ev.target.closest('[data-xact]');
+    if (xb) {
+      const x = (xmls || []).find(i => i.id === xb.closest('.card').dataset.xml);
+      if (!x) return;
+      if (xb.dataset.xact === 'chave') { await copiar(x.chave); toast('Chave de acesso copiada'); return; }
+      const txt = xb.innerHTML; xb.disabled = true; xb.textContent = 'Baixando…';
+      try {
+        const r = await chamar('getXml', x.id);
+        const url = URL.createObjectURL(new Blob([r.conteudo], { type: 'application/xml' }));
+        const a = document.createElement('a'); a.href = url; a.download = r.nome || 'nota.xml';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      } catch (e) { toast(e.message); }
+      xb.disabled = false; xb.innerHTML = txt;
+      return;
+    }
     const sb = ev.target.closest('[data-sact]');
     if (sb) {
       const s = sugestoes.find(x => x.id === sb.closest('.card').dataset.sug);
@@ -797,6 +899,7 @@
     b.disabled = true; b.classList.add('spin'); $('sub').textContent = 'Buscando no Gmail…';
     await atualizar('buscarAgora', [], null, 180000);
     setTimeout(autoPix, 500);
+    if (xmls) carregarXmls(true);
     b.disabled = false; b.classList.remove('spin');
   });
 
@@ -908,7 +1011,7 @@
     if (!confirm('Sair da sua conta neste aparelho?')) return;
     try { await chamar('sair'); } catch (e) {}
     gravarSessao(null); try { dlgF.close(); } catch (e) {}
-    contas = []; sugestoes = []; fornecedores = []; caixas = []; render(); pedirSenha();
+    contas = []; sugestoes = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
   }
   $('btnSair').addEventListener('click', sairDaConta);
   $('btnSairTopo').addEventListener('click', sairDaConta);

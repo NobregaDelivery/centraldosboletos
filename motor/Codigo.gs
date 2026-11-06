@@ -451,7 +451,10 @@ const FUNCOES_API = {
   adicionarFornecedor: (f) => adicionarFornecedor(f),
   removerFornecedor:   (email, assunto) => removerFornecedor(email, assunto),
   aceitarSugestao:     (id, nome) => aceitarSugestao(id, nome),
-  ignorarSugestao:     (id) => ignorarSugestao(id)
+  ignorarSugestao:     (id) => ignorarSugestao(id),
+  getXmls:             () => getXmls(),
+  getXml:              (id) => getXml(id),
+  buscarXmlsAgora:     () => { const n = buscarXmls(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
 };
 const DIAS_SESSAO = 180;
 const MAX_TENTATIVAS = 5;
@@ -725,6 +728,7 @@ function buscarBoletosSemTrava() {
   registrarCaixa(novas.length);
   try { buscarSugestoesSeHoje(); } catch (e) { console.warn('Sugestões: ' + e); }
   try { limparHistorico(); } catch (e) { console.warn('Histórico: ' + e); }
+  try { buscarXmlsDaRodada(); } catch (e) { console.warn('XMLs: ' + e); }
   try { ss.toast(novas.length + ' boleto(s) novo(s) encontrado(s).', 'Boletos', 5); } catch (e) {}
   return novas.length;
 }
@@ -1144,4 +1148,233 @@ function enviarAlerta() {
 
 function moeda(v) {
   return 'R$ ' + Number(v).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+// ===================== NOTAS FISCAIS EM XML =====================
+// Procura e-mails com anexo .xml (NF-e, NFC-e, NFS-e, CT-e), lê os dados principais,
+// guarda uma cópia na pasta "Central dos Boletos - XMLs" do Drive (uma subpasta por mês)
+// e registra na aba "XMLs". O conteúdo fica também na aba oculta "XMLs (arquivos)",
+// para o app conseguir baixar o arquivo de qualquer conta conectada.
+const ABA_XML = 'XMLs';
+const ABA_XML_ARQ = 'XMLs (arquivos)';
+const CAB_XML = ['ID', 'Recebido em', 'Tipo', 'Número', 'Emitente', 'CNPJ/CPF do emitente', 'Destinatário',
+                 'Valor', 'Emitida em', 'Chave de acesso', 'Arquivo', 'Remetente', 'Assunto', 'Link do e-mail',
+                 'Conta que recebeu', 'Arquivo no Drive'];
+const XML_DIAS_INICIO = 90;   // na primeira busca olha 90 dias para trás
+const XML_DIAS_ROTINA = 7;    // nas seguintes, a última semana
+const XML_PASTA = 'Central dos Boletos - XMLs';
+const XML_PEDACO = 45000;     // uma célula aceita até 50 mil caracteres
+
+function abaXml() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_XML);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_XML);
+    aba.getRange(1, 1, 1, CAB_XML.length).setValues([CAB_XML]).setFontWeight('bold');
+    aba.setFrozenRows(1);
+    aba.getRange('H2:H').setNumberFormat('R$ #,##0.00');
+    ['D2:D', 'F2:F', 'J2:J'].forEach(a => aba.getRange(a).setNumberFormat('@')); // número, CNPJ e chave como texto
+  }
+  return aba;
+}
+function abaXmlArq() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_XML_ARQ);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_XML_ARQ);
+    aba.getRange(1, 1, 1, 2).setValues([['ID', 'Conteúdo (em pedaços)']]).setFontWeight('bold');
+    aba.hideSheet();
+  }
+  return aba;
+}
+
+function buscarXmlsDaRodada() {
+  const props = PropertiesService.getScriptProperties();
+  const primeira = !props.getProperty('XML_INICIO');
+  const n = buscarXmls(primeira ? XML_DIAS_INICIO : XML_DIAS_ROTINA);
+  props.setProperty('XML_INICIO', String(Date.now()));
+  return n;
+}
+
+function buscarXmls(dias) {
+  const aba = abaXml();
+  const n = aba.getLastRow() - 1;
+  const linhas = n > 0 ? aba.getRange(2, 1, n, CAB_XML.length).getValues() : [];
+  const ids = new Set(linhas.map(r => String(r[0])));
+  const chaves = new Set(linhas.filter(r => r[9]).map(r => String(r[9]) + '|' + String(r[2])));
+  const eu = minhaConta();
+  const inicio = Date.now();
+
+  const q = 'has:attachment filename:xml newer_than:' + dias + 'd -in:chats';
+  const novas = [];
+  const conteudos = [];
+  for (const th of GmailApp.search(q, 0, 100)) {
+    if (Date.now() - inicio > 240000) break; // não passa do tempo limite do Google
+    for (const msg of th.getMessages()) {
+      let anexos = [];
+      try { anexos = msg.getAttachments({ includeInlineImages: false }); } catch (e) { continue; }
+      anexos.forEach((a, i) => {
+        const nomeArq = a.getName();
+        if (!/\.xml$/i.test(nomeArq) && !/xml/i.test(a.getContentType())) return;
+        const id = msg.getId() + '#' + i;
+        if (ids.has(id)) return;
+        let texto = '';
+        try { texto = a.getDataAsString('UTF-8'); } catch (e) { return; }
+        if (/encoding=["']ISO-8859-1["']/i.test(texto.slice(0, 200))) {
+          try { texto = a.getDataAsString('ISO-8859-1'); } catch (e) {}
+        }
+        const d = lerXmlFiscal(texto);
+        if (d.chave && chaves.has(d.chave + '|' + d.tipo)) { ids.add(id); return; } // mesma nota em outro e-mail
+        const de = String(msg.getFrom());
+        let linkDrive = '';
+        try { linkDrive = salvarXmlNoDrive(a.copyBlob(), d, msg.getDate()); } catch (e) { console.warn('Drive XML: ' + e); }
+        novas.push([id, msg.getDate(), d.tipo, d.numero, d.emitente || de.replace(/<.*>/, '').replace(/"/g, '').trim(),
+                    d.cnpjEmit, d.destinatario, d.valor === null ? '' : d.valor, d.emissao || '', d.chave,
+                    nomeArq, (de.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/) || [''])[0].toLowerCase(),
+                    String(msg.getSubject() || '').slice(0, 150),
+                    'https://mail.google.com/mail/?authuser=' + encodeURIComponent(eu) + '#all/' + th.getId(),
+                    contaDestino(msg), linkDrive]);
+        conteudos.push([id, texto]);
+        ids.add(id);
+        if (d.chave) chaves.add(d.chave + '|' + d.tipo);
+      });
+    }
+  }
+  if (novas.length) {
+    novas.forEach(r => aba.appendRow(r));
+    const arq = abaXmlArq();
+    conteudos.forEach(([id, texto]) => {
+      const pedacos = [];
+      for (let i = 0; i < texto.length; i += XML_PEDACO) pedacos.push(texto.slice(i, i + XML_PEDACO));
+      arq.appendRow([id].concat(pedacos));
+    });
+  }
+  return novas.length;
+}
+
+function salvarXmlNoDrive(blob, d, data) {
+  const raiz = pastaPorNome(DriveApp.getRootFolder(), XML_PASTA);
+  const mes = Utilities.formatDate(d.emissao instanceof Date ? d.emissao : data, Session.getScriptTimeZone(), 'yyyy-MM');
+  const pasta = pastaPorNome(raiz, mes);
+  const nome = blob.getName();
+  const existe = pasta.getFilesByName(nome);
+  if (existe.hasNext()) return existe.next().getUrl();
+  return pasta.createFile(blob).getUrl();
+}
+function pastaPorNome(mae, nome) {
+  const it = mae.getFoldersByName(nome);
+  return it.hasNext() ? it.next() : mae.createFolder(nome);
+}
+
+// Lê os campos principais dos XMLs fiscais mais comuns, sem depender do formato exato
+function lerXmlFiscal(texto) {
+  const r = { tipo: 'XML', numero: '', emitente: '', cnpjEmit: '', destinatario: '', valor: null, emissao: null, chave: '' };
+  let raiz;
+  try { raiz = XmlService.parse(String(texto).replace(/^﻿/, '')).getRootElement(); }
+  catch (e) { r.tipo = 'XML (não lido)'; return r; }
+
+  const todos = [];
+  (function andar(el) { todos.push(el); el.getChildren().forEach(andar); })(raiz);
+  const achar = (nome, dentro) => {
+    const lista = dentro ? descendentes(dentro) : todos;
+    return lista.find(e => e.getName() === nome) || null;
+  };
+  const txt = (nome, dentro) => { const e = achar(nome, dentro); return e ? e.getText().trim() : ''; };
+  const num = s => { const v = parseFloat(String(s).replace(',', '.')); return isNaN(v) ? null : v; };
+  const data = s => { if (!s) return null; const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+  const doc = el => el ? (txt('CNPJ', el) || txt('Cnpj', el) || txt('CPF', el) || txt('Cpf', el)) : '';
+  const nomeRaiz = raiz.getName();
+  const tem = n => todos.some(e => e.getName() === n);
+
+  if (tem('infNFe')) {                                   // NF-e (55) e NFC-e (65)
+    const inf = achar('infNFe');
+    const mod = txt('mod', inf);
+    r.tipo = mod === '65' ? 'NFC-e' : 'NF-e';
+    r.numero = txt('nNF', inf) + (txt('serie', inf) ? ' / série ' + txt('serie', inf) : '');
+    const emit = achar('emit', inf), dest = achar('dest', inf);
+    r.emitente = emit ? txt('xNome', emit) : '';
+    r.cnpjEmit = doc(emit);
+    r.destinatario = dest ? txt('xNome', dest) : '';
+    r.valor = num(txt('vNF', inf));
+    r.emissao = data(txt('dhEmi', inf) || txt('dEmi', inf));
+    const idAttr = inf.getAttribute('Id');
+    r.chave = (idAttr ? idAttr.getValue() : '').replace(/\D/g, '') || txt('chNFe');
+  } else if (tem('infCte')) {                            // CT-e
+    const inf = achar('infCte');
+    r.tipo = 'CT-e';
+    r.numero = txt('nCT', inf);
+    const emit = achar('emit', inf), dest = achar('dest', inf) || achar('rem', inf);
+    r.emitente = emit ? txt('xNome', emit) : '';
+    r.cnpjEmit = doc(emit);
+    r.destinatario = dest ? txt('xNome', dest) : '';
+    r.valor = num(txt('vTPrest', inf));
+    r.emissao = data(txt('dhEmi', inf));
+    const idAttr = inf.getAttribute('Id');
+    r.chave = (idAttr ? idAttr.getValue() : '').replace(/\D/g, '');
+  } else if (tem('infNFSe')) {                           // NFS-e padrão nacional
+    const inf = achar('infNFSe');
+    r.tipo = 'NFS-e';
+    r.numero = txt('nNFSe', inf);
+    const emit = achar('emit', inf), toma = achar('toma', inf);
+    r.emitente = emit ? txt('xNome', emit) : '';
+    r.cnpjEmit = doc(emit);
+    r.destinatario = toma ? txt('xNome', toma) : '';
+    r.valor = num(txt('vLiq', inf)) ?? num(txt('vServ', inf));
+    r.emissao = data(txt('dhEmi', inf) || txt('dhProc', inf));
+    const idAttr = inf.getAttribute('Id');
+    r.chave = (idAttr ? idAttr.getValue() : '').replace(/\D/g, '');
+  } else if (tem('InfNfse') || tem('Nfse') || /nfse/i.test(nomeRaiz)) { // NFS-e municipal (ABRASF e parecidos)
+    const inf = achar('InfNfse') || raiz;
+    r.tipo = 'NFS-e';
+    r.numero = txt('Numero', inf) || txt('NumeroNfse', inf);
+    const prest = achar('PrestadorServico', inf) || achar('Prestador', inf);
+    const toma = achar('TomadorServico', inf) || achar('Tomador', inf);
+    r.emitente = prest ? (txt('RazaoSocial', prest) || txt('NomeFantasia', prest)) : '';
+    r.cnpjEmit = doc(prest);
+    r.destinatario = toma ? txt('RazaoSocial', toma) : '';
+    r.valor = num(txt('ValorLiquidoNfse', inf)) ?? num(txt('ValorServicos', inf));
+    r.emissao = data(txt('DataEmissao', inf) || txt('DataEmissaoNfse', inf));
+    r.chave = txt('CodigoVerificacao', inf) ? 'NFSe-' + r.cnpjEmit + '-' + r.numero : '';
+  } else if (tem('infEvento')) {                         // cancelamento, carta de correção etc.
+    const inf = achar('infEvento');
+    const desc = txt('descEvento', inf) || txt('xEvento', inf) || 'Evento';
+    r.tipo = 'Evento: ' + desc;
+    r.chave = txt('chNFe', inf) || txt('chCTe', inf);
+    r.numero = r.chave ? r.chave.substr(25, 9).replace(/^0+/, '') : '';
+    r.cnpjEmit = txt('CNPJ', inf);
+    r.emissao = data(txt('dhEvento', inf));
+  }
+  return r;
+}
+function descendentes(el) {
+  const out = [];
+  (function andar(e) { e.getChildren().forEach(f => { out.push(f); andar(f); }); })(el);
+  return out;
+}
+
+function getXmls() {
+  const aba = planilha().getSheetByName(ABA_XML);
+  if (!aba || aba.getLastRow() < 2) return [];
+  const tz = Session.getScriptTimeZone();
+  const fmt = d => d instanceof Date ? Utilities.formatDate(d, tz, 'yyyy-MM-dd') : '';
+  return aba.getRange(2, 1, aba.getLastRow() - 1, CAB_XML.length).getValues().filter(r => r[0]).map(r => ({
+    id: String(r[0]), recebido: fmt(r[1]), tipo: String(r[2]), numero: String(r[3]), emitente: String(r[4]),
+    cnpj: String(r[5]), destinatario: String(r[6]), valor: typeof r[7] === 'number' ? r[7] : null,
+    emissao: fmt(r[8]), chave: String(r[9]), arquivo: String(r[10]), remetente: String(r[11]),
+    assunto: String(r[12]), link: String(r[13]), conta: String(r[14]), drive: String(r[15])
+  })).sort((a, b) => ((b.emissao || b.recebido) > (a.emissao || a.recebido) ? 1 : -1));
+}
+
+function getXml(id) {
+  const aba = planilha().getSheetByName(ABA_XML_ARQ);
+  if (aba && aba.getLastRow() > 1) {
+    const ids = aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues().map(r => String(r[0]));
+    const i = ids.indexOf(String(id));
+    if (i >= 0) {
+      const lin = aba.getRange(i + 2, 1, 1, aba.getLastColumn()).getValues()[0];
+      const reg = getXmls().find(x => x.id === String(id));
+      return { nome: reg ? reg.arquivo : 'nota.xml', conteudo: lin.slice(1).join('') };
+    }
+  }
+  throw new Error('Não encontrei o conteúdo deste XML.');
 }
