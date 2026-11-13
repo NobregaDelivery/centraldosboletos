@@ -333,7 +333,7 @@ function estado(msg) {
   let esperadas = [];
   try { esperadas = analisarPadroes(contas); } catch (e) { console.warn('Padrões: ' + e); }
   return { contas: contas, fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes,
-           esperadas: esperadas, msg: msg || '' };
+           esperadas: esperadas, empresas: lerConfigEmpresas(), fixas: getFixas(), msg: msg || '' };
 }
 
 function adicionarFornecedor(f) {
@@ -458,6 +458,9 @@ const FUNCOES_API = {
   ignorarSugestao:     (id) => ignorarSugestao(id),
   getXmls:             () => getXmls(),
   dispensarEsperada:   (chave, mes) => { dispensarEsperada(chave, mes); return estado(''); },
+  definirEmpresa:      (nome, cfg) => { definirEmpresa(nome, cfg); return estado(''); },
+  adicionarFixa:       (f) => { adicionarFixa(f); return estado(''); },
+  pararFixa:           (id) => { pararFixa(id); return estado(''); },
   getXml:              (id) => getXml(id),
   buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
 };
@@ -826,7 +829,9 @@ function buscarBoletosSemTrava() {
   }
   registrarCaixa(novas.length);
   try { buscarSugestoesSeHoje(); } catch (e) { console.warn('Sugestões: ' + e); }
+  try { pagarAutomaticas(); } catch (e) { console.warn('Automáticas: ' + e); }
   try { limparHistorico(); } catch (e) { console.warn('Histórico: ' + e); }
+  try { gerarContasFixas(); } catch (e) { console.warn('Contas fixas: ' + e); }
   try { buscarXmlsDaRodada(); } catch (e) { console.warn('XMLs: ' + e); }
   try { ss.toast(novas.length + ' boleto(s) novo(s) encontrado(s).', 'Boletos', 5); } catch (e) {}
   return novas.length;
@@ -1219,9 +1224,12 @@ function enviarAlerta() {
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
   const limite = new Date(hoje.getTime() + CONFIG.DIAS_ALERTA * 24 * 3600 * 1000);
 
-  const linhas = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues()
+  let linhas = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues()
     .filter(r => r[5] !== 'Pago')
     .filter(r => !(r[2] instanceof Date) || r[2] <= limite);
+  const cfgEmp = lerConfigEmpresas();
+  const automaticas = linhas.filter(r => (cfgEmp[chaveForn(r[0])] || {}).auto);
+  linhas = linhas.filter(r => !(cfgEmp[chaveForn(r[0])] || {}).auto);
   let esperadas = [], aumentos = {};
   try {
     const lista = getContas();
@@ -1229,6 +1237,8 @@ function enviarAlerta() {
     lista.forEach(x => { if (x.aumento) aumentos[x.id] = x.aumento; });
   } catch (e) { console.warn('Padrões no alerta: ' + e); }
   if (!linhas.length && !esperadas.length) return;
+  const htmlAuto = !automaticas.length ? '' : '<p style="font-size:13px;color:#666">Saem no pagamento automático (só confira no banco): ' +
+    automaticas.map(r => r[0] + (r[3] ? ' ' + moeda(r[3]) : '')).join(', ') + '.</p>';
 
   const html = linhas.map(r => {
     const venc = r[2] instanceof Date ? r[2] : null;
@@ -1257,7 +1267,7 @@ function enviarAlerta() {
     htmlBody: (linhas.length ? '<p>Contas a pagar nos próximos ' + CONFIG.DIAS_ALERTA + ' dias:</p>' +
       '<table cellpadding="6" style="border-collapse:collapse" border="1">' +
       '<tr><th>Fornecedor</th><th>Vencimento</th><th>Valor</th><th>Linha digitável</th><th>E-mail</th></tr>' +
-      html + '</table>' : '') + htmlEsp + '<p><a href="https://nobregadelivery.github.io/centraldosboletos/">Abrir a Central dos Boletos</a> — marque como "Pago" depois de pagar.</p>'
+      html + '</table>' : '') + htmlEsp + htmlAuto + '<p><a href="https://nobregadelivery.github.io/centraldosboletos/">Abrir a Central dos Boletos</a> — marque como "Pago" depois de pagar.</p>'
   });
 }
 
@@ -1766,4 +1776,127 @@ function parcelasDosXmlsAntigos() {
   const n = itens.length ? criarContasDasParcelas(itens) : 0;
   props.setProperty('PARCELAS_ANTIGAS_OK', '1');
   return n;
+}
+
+// ===================== CONFIGURAÇÕES POR EMPRESA =====================
+// Por empresa (pelo nome): categoria (Empresa ou Casa) e se é paga sozinha (débito automático / Pix Automático)
+function lerConfigEmpresas() {
+  return JSON.parse(PropertiesService.getScriptProperties().getProperty('CONFIG_EMPRESAS') || '{}');
+}
+function definirEmpresa(nome, cfg) {
+  const k = chaveForn(nome);
+  if (!k) throw new Error('Empresa sem nome.');
+  const todas = lerConfigEmpresas();
+  const atual = todas[k] || {};
+  if (cfg && 'cat' in cfg) atual.cat = ['Empresa', 'Casa'].indexOf(cfg.cat) >= 0 ? cfg.cat : '';
+  if (cfg && 'auto' in cfg) atual.auto = !!cfg.auto;
+  atual.nome = String(nome).slice(0, 60);
+  if (!atual.cat && !atual.auto) delete todas[k]; else todas[k] = atual;
+  PropertiesService.getScriptProperties().setProperty('CONFIG_EMPRESAS', JSON.stringify(todas));
+}
+
+// Contas de empresas com pagamento automático viram "Pago" no dia seguinte ao vencimento
+function pagarAutomaticas() {
+  if (CONFIG.PLANILHA_PRINCIPAL) return 0;
+  const cfg = lerConfigEmpresas();
+  if (!Object.keys(cfg).some(k => cfg[k].auto)) return 0;
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  if (!contas || contas.getLastRow() < 2) return 0;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const vals = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues();
+  let n = 0;
+  vals.forEach((r, i) => {
+    if (r[5] === 'Pago' || !(r[2] instanceof Date) || r[2] >= hoje || !(cfg[chaveForn(r[0])] || {}).auto) return;
+    contas.getRange(i + 2, 6).setValue('Pago');
+    contas.getRange(i + 2, 12).setValue((r[11] ? r[11] + ' · ' : '') + 'pago automaticamente (confira no banco)');
+    contas.getRange(i + 2, 14).setValue(new Date());
+    n++;
+  });
+  return n;
+}
+
+// ===================== CONTAS FIXAS (REPETEM TODO MÊS) =====================
+// Aluguel, condomínio, salários: não chegam por e-mail. A conta de cada mês é criada 15 dias antes do vencimento.
+const ABA_FIXAS = 'Contas fixas';
+const DIAS_ANTES_FIXA = 15;
+function abaFixas() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_FIXAS);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_FIXAS);
+    aba.getRange(1, 1, 1, 7).setValues([['ID', 'Nome', 'Valor', 'Dia do vencimento', 'Observação', 'Ativa', 'Criada em']]).setFontWeight('bold');
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+function getFixas() {
+  const aba = planilha().getSheetByName(ABA_FIXAS);
+  if (!aba || aba.getLastRow() < 2) return [];
+  return aba.getRange(2, 1, aba.getLastRow() - 1, 7).getValues()
+    .filter(r => r[0] && r[5] !== false && String(r[5]).toLowerCase() !== 'não')
+    .map(r => ({ id: String(r[0]), nome: String(r[1]), valor: typeof r[2] === 'number' ? r[2] : null,
+                 dia: Number(r[3]) || 1, obs: String(r[4] || '') }));
+}
+function vencDaFixa(dia, ano, mes) {
+  const ultimo = new Date(ano, mes + 1, 0).getDate();
+  return new Date(ano, mes, Math.min(dia, ultimo));
+}
+function adicionarFixa(f) {
+  const nome = String(f.nome || '').trim().slice(0, 60);
+  if (!nome) throw new Error('Informe o nome da conta fixa.');
+  const p = String(f.vencimento || '').split('-');
+  if (p.length !== 3) throw new Error('Informe o primeiro vencimento.');
+  const primeiro = new Date(+p[0], +p[1] - 1, +p[2]);
+  const valor = f.valor != null && f.valor !== '' && !isNaN(f.valor) ? Number(f.valor) : '';
+  const id = 'F' + Date.now().toString(36);
+  abaFixas().appendRow([id, nome, valor, primeiro.getDate(), String(f.obs || '').slice(0, 200), true, new Date()]);
+  // a primeira já entra agora, com a data informada
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  garantirCabecalho(contas);
+  const mes = Utilities.formatDate(primeiro, Session.getScriptTimeZone(), 'yyyy-MM');
+  contas.appendRow([nome, new Date(), primeiro, valor, '', 'A pagar', 'Conta fixa mensal', '', 'conta fixa',
+                    'fixa-' + id + '-' + mes, '', String(f.obs || ''), '', '']);
+  contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).sort({ column: 3, ascending: true });
+  if (CONFIG.CRIAR_EVENTO_AGENDA) try { criarLembrete(nome, { vencimento: primeiro, valor: valor, linha: '' }); } catch (e) {}
+  return id;
+}
+function pararFixa(id) {
+  const aba = planilha().getSheetByName(ABA_FIXAS);
+  if (!aba || aba.getLastRow() < 2) return;
+  const ids = aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues().map(r => String(r[0]));
+  const i = ids.indexOf(String(id));
+  if (i >= 0) aba.getRange(i + 2, 6).setValue(false);
+}
+function gerarContasFixas(hojeTeste) {
+  if (CONFIG.PLANILHA_PRINCIPAL) return 0;
+  const fixas = getFixas();
+  if (!fixas.length) return 0;
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  const n = contas.getLastRow() - 1;
+  const ids = new Set(n > 0 ? contas.getRange(2, 10, n, 1).getValues().map(r => String(r[0])) : []);
+  lerIdsArquivados().forEach(i => ids.add(i));
+  const criadas = {};
+  const aba = planilha().getSheetByName(ABA_FIXAS);
+  aba.getRange(2, 1, aba.getLastRow() - 1, 7).getValues().forEach(r => { if (r[6] instanceof Date) criadas[String(r[0])] = r[6]; });
+  const tz = Session.getScriptTimeZone();
+  const hoje = hojeTeste ? new Date(hojeTeste) : new Date(); hoje.setHours(0, 0, 0, 0);
+  const novas = [];
+  fixas.forEach(f => {
+    [0, 1].forEach(soma => {
+      const venc = vencDaFixa(f.dia, hoje.getFullYear(), hoje.getMonth() + soma);
+      const id = 'fixa-' + f.id + '-' + Utilities.formatDate(venc, tz, 'yyyy-MM');
+      if (ids.has(id)) return;
+      if ((venc - hoje) / 864e5 > DIAS_ANTES_FIXA) return;       // ainda falta muito
+      const criada = criadas[f.id]; if (criada && venc < new Date(criada.getFullYear(), criada.getMonth(), criada.getDate())) return;
+      if ((hoje - venc) / 864e5 > 20) return;                   // mês já passou faz tempo
+      novas.push([f.nome, new Date(), venc, f.valor === null ? '' : f.valor, '', 'A pagar', 'Conta fixa mensal', '',
+                  'conta fixa', id, '', f.obs, '', '']);
+      ids.add(id);
+    });
+  });
+  if (novas.length) {
+    novas.forEach(r => contas.appendRow(r));
+    contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).sort({ column: 3, ascending: true });
+  }
+  return novas.length;
 }

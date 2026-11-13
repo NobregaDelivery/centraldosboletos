@@ -175,6 +175,37 @@
   .refresh.ajuda { text-decoration: none; font-weight: 700; width: 36px; justify-content: center; padding: 8px 0; }
   .card.sug { --c: var(--accent); border-left-style: dashed; }
   .card.esp { border-left-style: dashed; }
+  .barra2 { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .barra2[hidden] { display: none; }
+  .seg { display: inline-flex; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 2px; }
+  .seg button { border: 0; background: none; font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; color: var(--muted); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--card); font-weight: 600; }
+  .auto .badge { background: var(--ok-bg); color: var(--ok); }
+  .card.auto { --c: var(--ok); }
+  .cfg-emp { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 4px 0 12px; font-size: 13.5px; }
+  .cfg-emp select { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .cfg-emp label { display: inline-flex; gap: 6px; align-items: center; }
+  label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; margin: 6px 0; }
+  .cal-top { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; }
+  .cal-top b { font-size: 16px; }
+  .cal-top button { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 8px; width: 36px; height: 32px; font-size: 18px; cursor: pointer; }
+  .cal-tot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px; }
+  .cal-tot div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px; font-size: 12px; color: var(--muted); }
+  .cal-tot b { display: block; font-size: 14.5px; color: var(--ink); }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .cal .dow { font-size: 11px; color: var(--muted); text-align: center; padding: 2px 0; }
+  .cal .dia { min-height: 54px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 3px; font: inherit; text-align: left;
+    display: flex; flex-direction: column; gap: 2px; cursor: pointer; color: var(--ink); }
+  .cal .dia.vazio { visibility: hidden; }
+  .cal .dia.hoje { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .cal .dia.sel { background: var(--soon-bg); }
+  .cal .dia i { font-style: normal; font-size: 11px; color: var(--muted); }
+  .cal .dia s { text-decoration: none; font-size: 10.5px; font-weight: 600; border-radius: 5px; padding: 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cal .dia s.a { background: var(--soon-bg); color: var(--soon); }
+  .cal .dia s.v { background: var(--late-bg); color: var(--late); }
+  .cal .dia s.p { background: var(--ok-bg); color: var(--ok); }
+  .cal .dia s.e { border: 1px dashed var(--muted); color: var(--muted); }
+  .cal-legenda { font-size: 12px; color: var(--muted); margin: 8px 2px 0; }
   .who .alta { display: block; color: var(--late); font-weight: 600; font-size: 12.5px; margin-top: 2px; }
   .hv { display: inline-block; margin: 0 10px 2px 0; white-space: nowrap; }
   .btn.ampliar { margin-top: 8px; flex: none; padding: 7px 12px; font-size: 13px; }
@@ -241,6 +272,17 @@
     <button class="tab" data-f="pagos" aria-pressed="false">Histórico de pagos</button>
     <button class="tab" data-f="xml" aria-pressed="false">Notas XML</button>
   </nav>
+  <div class="barra2" id="barra2">
+    <div class="seg" id="segCat" role="group" aria-label="Mostrar">
+      <button data-cat="" aria-pressed="true">Tudo</button>
+      <button data-cat="Empresa" aria-pressed="false">Empresa</button>
+      <button data-cat="Casa" aria-pressed="false">Casa</button>
+    </div>
+    <div class="seg" id="segVista" role="group" aria-label="Visualização">
+      <button data-vista="lista" aria-pressed="true">Lista</button>
+      <button data-vista="cal" aria-pressed="false">Calendário</button>
+    </div>
+  </div>
 
   <div id="list">
     <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
@@ -291,6 +333,8 @@
     <label>Observação (opcional)
       <input id="fObs" maxlength="200" placeholder="Ex.: parcela 3 de 10">
     </label>
+    <label class="check"><input type="checkbox" id="fFixa"> Repete todo mês (conta fixa: aluguel, condomínio, salário…)</label>
+    <p class="note" id="fFixaNota" hidden>A conta de cada mês aparece sozinha 15 dias antes do vencimento, no mesmo dia do mês. Para parar, use Empresas → Contas fixas.</p>
     <button class="btn primary" type="submit" id="salvarAdd">Salvar boleto</button>
   </form>
 </dialog>
@@ -301,6 +345,8 @@
   <ul class="forn-list" id="caixaList"></ul>
   <p class="sec">Empresas cadastradas</p>
   <ul class="forn-list" id="fornList"></ul>
+  <p class="sec">Contas fixas (repetem todo mês)</p>
+  <ul class="forn-list" id="fixaList"></ul>
   <p class="sec">Nova empresa</p>
   <form class="add" id="formForn">
     <label>Nome da empresa *<input id="nNome" required maxlength="60" placeholder="Ex.: Vivo, Condomínio"></label>
@@ -523,6 +569,7 @@
   function situacao(c) {
     if (c.status === 'Pago') return { cls: 'paid', txt: c.pagoEm ? 'Pago em ' + dataBR(c.pagoEm) : 'Pago' };
     if (ehAviso(c)) return { cls: 'soon', txt: 'Confira no banco' };
+    if (ehAuto(c)) return { cls: 'auto', txt: 'Pagamento automático' };
     const n = dias(c.vencimento);
     if (n === null) return { cls: 'later', txt: 'Sem vencimento' };
     if (n < 0) return { cls: 'late', txt: n === -1 ? 'Venceu ontem' : 'Venceu há ' + (-n) + ' dias' };
@@ -594,9 +641,9 @@
   }
 
   function resumo() {
-    const abertas = contas.filter(c => c.status !== 'Pago');
+    const abertas = contas.filter(c => c.status !== 'Pago' && naCategoria(c.fornecedor));
     const soma = arr => arr.reduce((s, c) => s + (c.valor || 0), 0);
-    const late = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n < 0; });
+    const late = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n < 0 && !ehAuto(c); });
     const soon = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n >= 0 && n <= 7; });
     $('sTotal').textContent = brl(soma(abertas));  $('sTotalN').textContent = abertas.length + ' conta(s)';
     $('sLate').textContent = brl(soma(late));      $('sLateN').textContent = late.length + ' conta(s)';
@@ -645,6 +692,13 @@
           ${c.historico && c.historico.length ? `<dt>Valores anteriores</dt><dd>${c.historico.map(p =>
             `<span class="hv">${esc(mesCurto(p.d))} ${brl(p.v)}</span>`).join('')}</dd>` : ''}
         </dl>
+        ${ehAviso(c) ? '' : `<div class="cfg-emp" data-emp="${esc(c.fornecedor)}">
+          <label>Categoria <select data-cfg="cat">
+            <option value="" ${!cfgDe(c.fornecedor).cat ? 'selected' : ''}>—</option>
+            <option ${cfgDe(c.fornecedor).cat === 'Empresa' ? 'selected' : ''}>Empresa</option>
+            <option ${cfgDe(c.fornecedor).cat === 'Casa' ? 'selected' : ''}>Casa</option></select></label>
+          <label><input type="checkbox" data-cfg="auto" ${cfgDe(c.fornecedor).auto ? 'checked' : ''}> Pago sozinho (débito automático / Pix Automático)</label>
+        </div>`}
         <div class="edit">
           <label>Vencimento<input type="date" data-f="vencimento" value="${esc(c.vencimento)}"></label>
           <label>Valor (R$)<input type="number" step="0.01" inputmode="decimal" data-f="valor" value="${c.valor ?? ''}"></label>
@@ -698,8 +752,13 @@
   function render() {
     resumo();
     document.body.classList.toggle('modo-xml', filtro === 'xml');
+    $('barra2').hidden = filtro === 'xml';
+    $('segVista').style.visibility = filtro === 'abertos' ? 'visible' : 'hidden';
+    document.querySelectorAll('#segCat button').forEach(b => b.setAttribute('aria-pressed', b.dataset.cat === catFiltro));
+    document.querySelectorAll('#segVista button').forEach(b => b.setAttribute('aria-pressed', b.dataset.vista === vista));
     if (filtro === 'xml') { renderXml(); return; }
-    let lista = contas.slice();
+    if (filtro === 'abertos' && vista === 'cal') { renderCal(); return; }
+    let lista = contas.filter(c => naCategoria(c.fornecedor));
     if (filtro === 'abertos') lista = lista.filter(c => c.status !== 'Pago');
     if (filtro === 'pagos') lista = lista.filter(c => c.status === 'Pago');
     const ord = (a, b) => (a.vencimento || '9999') < (b.vencimento || '9999') ? -1 : 1;
@@ -707,20 +766,22 @@
 
     const blocoSug = filtro === 'pagos' || !sugestoes.length ? '' :
       `<h2><span>Sugestões de boleto para cadastro</span><span>${sugestoes.length}</span></h2>` + sugestoes.map(sugHTML).join('');
-    const blocoEsp = filtro === 'pagos' || !esperadas.length ? '' :
-      `<h2><span>Esperadas que ainda não chegaram</span><span>${esperadas.length}</span></h2>` + esperadas.map(espHTML).join('');
+    const espVis = esperadas.filter(e => naCategoria(e.fornecedor));
+    const blocoEsp = filtro === 'pagos' || !espVis.length ? '' :
+      `<h2><span>Esperadas que ainda não chegaram</span><span>${espVis.length}</span></h2>` + espVis.map(espHTML).join('');
     if (!lista.length) {
       $('list').innerHTML = blocoEsp + `<div class="empty">${filtro === 'pagos' ? 'Nenhum pagamento nos últimos 30 dias.' : 'Tudo em dia. Nenhuma conta a pagar.'}</div>` + blocoSug;
       return;
     }
     const aberto = c => c.status !== 'Pago', n = c => dias(c.vencimento);
     const grupos = filtro === 'pagos' ? [['__HIST__', []], ['Pagos nos últimos 30 dias', lista]] : [
-      ['Vencidos', lista.filter(c => aberto(c) && n(c) !== null && n(c) < 0)],
-      ['Próximos 7 dias', lista.filter(c => aberto(c) && n(c) !== null && n(c) >= 0 && n(c) <= 7)],
+      ['Vencidos', lista.filter(c => aberto(c) && !ehAuto(c) && n(c) !== null && n(c) < 0)],
+      ['Próximos 7 dias', lista.filter(c => aberto(c) && !ehAuto(c) && n(c) !== null && n(c) >= 0 && n(c) <= 7)],
       ['__ESP__', []],
       ['Avisos do DDA (confira no banco)', lista.filter(c => aberto(c) && ehAviso(c))],
       ['__SUG__', []],
-      ['Mais adiante', lista.filter(c => aberto(c) && n(c) !== null && n(c) > 7)],
+      ['Mais adiante', lista.filter(c => aberto(c) && !ehAuto(c) && n(c) !== null && n(c) > 7)],
+      ['Pagamento automático (só conferir)', lista.filter(c => ehAuto(c) && n(c) !== null)],
       ['Sem vencimento identificado', lista.filter(c => aberto(c) && n(c) === null && !ehAviso(c))],
       ['Pagos', lista.filter(c => !aberto(c))]
     ];
@@ -731,7 +792,67 @@
     document.querySelectorAll('.card.open .qr[data-pix]').forEach(el => desenharQr(el, el.dataset.pix));
   }
 
-  let fornecedores = [], caixas = [], sugestoes = [], esperadas = [];
+  let fornecedores = [], caixas = [], sugestoes = [], esperadas = [], empresas = {}, fixas = [];
+  const MESES_CAL = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  // Itens do calendário: contas (pagas e a pagar), esperadas deste mês e contas fixas projetadas nos meses à frente
+  function itensDoMes(ano, mes) {
+    const pref = ano + '-' + String(mes + 1).padStart(2, '0');
+    const it = contas.filter(c => c.vencimento && c.vencimento.slice(0, 7) === pref && naCategoria(c.fornecedor) && !ehAviso(c))
+      .map(c => ({ d: c.vencimento, nome: c.fornecedor, v: c.valor, tipo: c.status === 'Pago' ? 'p' : (dias(c.vencimento) < 0 && !ehAuto(c) ? 'v' : 'a'), id: c.id }));
+    esperadas.filter(e => e.previsto.slice(0, 7) === pref && naCategoria(e.fornecedor))
+      .forEach(e => it.push({ d: e.previsto, nome: e.fornecedor, v: e.valor, tipo: 'e', chave: e.chave }));
+    const ultimo = new Date(ano, mes + 1, 0).getDate();
+    fixas.filter(f => naCategoria(f.nome)).forEach(f => {
+      const d = pref + '-' + String(Math.min(f.dia, ultimo)).padStart(2, '0');
+      if (d < ymd(new Date())) return;
+      if (it.some(x => chaveForn(x.nome) === chaveForn(f.nome) && x.d.slice(0, 7) === pref)) return;
+      it.push({ d, nome: f.nome, v: f.valor, tipo: 'e', fixa: true });
+    });
+    return it.sort((a, b) => a.d < b.d ? -1 : 1);
+  }
+  function renderCal() {
+    const hoje = new Date();
+    if (!mesCal) mesCal = { a: hoje.getFullYear(), m: hoje.getMonth() };
+    const { a, m } = mesCal;
+    const itens = itensDoMes(a, m);
+    const soma = t => itens.filter(i => t.includes(i.tipo)).reduce((s, i) => s + (i.v || 0), 0);
+    const primeiro = new Date(a, m, 1), ultimo = new Date(a, m + 1, 0).getDate();
+    const vazio = (primeiro.getDay() + 6) % 7;   // semana começa na segunda
+    let cel = ['seg','ter','qua','qui','sex','sáb','dom'].map(d => `<div class="dow">${d}</div>`).join('');
+    for (let i = 0; i < vazio; i++) cel += '<div class="dia vazio"></div>';
+    for (let d = 1; d <= ultimo; d++) {
+      const dt = ymd(new Date(a, m, d));
+      const doDia = itens.filter(i => i.d === dt);
+      const tot = doDia.reduce((s, i) => s + (i.v || 0), 0);
+      const cls = doDia.some(i => i.tipo === 'v') ? 'v' : doDia.some(i => i.tipo === 'a') ? 'a' : doDia.some(i => i.tipo === 'e') ? 'e' : 'p';
+      cel += `<button class="dia ${dt === ymd(hoje) ? 'hoje' : ''} ${dt === diaSel ? 'sel' : ''}" data-dia="${dt}" aria-label="${d} de ${MESES_CAL[m]}${doDia.length ? ', ' + doDia.length + ' conta(s)' : ''}">
+        <i>${d}</i>${doDia.length ? `<s class="${cls}">${tot ? brl(tot).replace('R$', '').replace(/,\d\d$/, '').trim() : doDia.length}</s>` : ''}</button>`;
+    }
+    let lista = '';
+    if (diaSel && diaSel.slice(0, 7) === ymd(primeiro).slice(0, 7)) {
+      const doDia = itens.filter(i => i.d === diaSel);
+      lista = `<h2><span>${dataBR(diaSel)}</span><span class="num">${brl(doDia.reduce((s, i) => s + (i.v || 0), 0))}</span></h2>` +
+        (doDia.length ? doDia.map(i => i.id ? cardHTML(contas.find(c => c.id === i.id)) :
+          `<article class="card esp soon"><div class="main-row" style="cursor:default"><div class="who"><b>${esc(i.nome)}</b>
+           <span>${i.fixa ? 'Conta fixa (vai aparecer 15 dias antes)' : 'Esperada, ainda não chegou'}</span></div>
+           <div class="amount"><b class="num">~${brl(i.v || 0)}</b><span class="badge">Previsão</span></div></div></article>`).join('')
+         : '<div class="empty">Nenhuma conta neste dia.</div>');
+    }
+    $('list').innerHTML = `
+      <div class="cal-top"><button data-cal="-1" aria-label="Mês anterior">‹</button><b>${MESES_CAL[m][0].toUpperCase() + MESES_CAL[m].slice(1)} de ${a}</b><button data-cal="1" aria-label="Próximo mês">›</button></div>
+      <div class="cal-tot"><div>A pagar<b class="num">${brl(soma(['a', 'v']))}</b></div><div>Já pago<b class="num">${brl(soma(['p']))}</b></div><div>Previsto a mais<b class="num">~${brl(soma(['e']))}</b></div></div>
+      <div class="cal">${cel}</div>
+      <p class="cal-legenda">Toque num dia para ver as contas. "Previsto a mais" soma as contas fixas e as esperadas que ainda não chegaram. Os pagos somem do histórico depois de 30 dias.</p>
+      ${lista}`;
+    document.querySelectorAll('.card.open .qr[data-pix]').forEach(el => desenharQr(el, el.dataset.pix));
+  }
+  let catFiltro = '', vista = 'lista', mesCal = null, diaSel = null;
+  try { catFiltro = localStorage.getItem('central_boletos_cat') || ''; vista = localStorage.getItem('central_boletos_vista') || 'lista'; } catch (e) {}
+  const chaveForn = n => String(n || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const cfgDe = nome => empresas[chaveForn(nome)] || {};
+  const naCategoria = nome => !catFiltro || cfgDe(nome).cat === catFiltro;
+  const ehAuto = c => c.status !== 'Pago' && !!cfgDe(c.fornecedor).auto;
   async function atualizar(fn, args, _sem_uso, espera) {
     try {
       const r = await Promise.race([
@@ -740,7 +861,8 @@
       ]);
       if (Array.isArray(r)) contas = r;
       else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; sugestoes = r.sugestoes || sugestoes;
-             esperadas = r.esperadas || esperadas; renderForn(); if (r.msg) toast(r.msg); }
+             esperadas = r.esperadas || esperadas; empresas = r.empresas || empresas; fixas = r.fixas || fixas;
+             renderForn(); if (r.msg) toast(r.msg); }
       render(); return true;
     } catch (e) {
       toast('Erro: ' + (e && e.message ? e.message : e)); return false;
@@ -977,6 +1099,26 @@
     }
   });
 
+  const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  $('segCat').addEventListener('click', ev => { const b = ev.target.closest('button'); if (!b) return; catFiltro = b.dataset.cat; guardar('central_boletos_cat', catFiltro); render(); });
+  $('segVista').addEventListener('click', ev => { const b = ev.target.closest('button'); if (!b) return; vista = b.dataset.vista; guardar('central_boletos_vista', vista); render(); });
+  $('list').addEventListener('click', ev => {
+    const nav = ev.target.closest('[data-cal]');
+    if (nav) { const d = new Date(mesCal.a, mesCal.m + Number(nav.dataset.cal), 1); mesCal = { a: d.getFullYear(), m: d.getMonth() }; diaSel = null; renderCal(); return; }
+    const dia = ev.target.closest('.dia[data-dia]');
+    if (dia) { diaSel = diaSel === dia.dataset.dia ? null : dia.dataset.dia; renderCal(); }
+  });
+  $('list').addEventListener('change', async ev => {
+    const el = ev.target.closest('[data-cfg]'); if (!el) return;
+    const nome = el.closest('[data-emp]').dataset.emp;
+    const cfg = el.dataset.cfg === 'cat' ? { cat: el.value } : { auto: el.checked };
+    el.disabled = true;
+    if (await atualizar('definirEmpresa', [nome, cfg]))
+      toast(el.dataset.cfg === 'cat' ? nome + (el.value ? ': ' + el.value : ': sem categoria') : nome + (el.checked ? ': marcado como pagamento automático' : ': pagamento automático desligado'));
+  });
+  $('formAdd').addEventListener('reset', () => setTimeout(() => { $('fFixaNota').hidden = true; $('salvarAdd').textContent = 'Salvar boleto'; }, 0));
+  $('fFixa').addEventListener('change', () => { $('fFixaNota').hidden = !$('fFixa').checked; $('salvarAdd').textContent = $('fFixa').checked ? 'Salvar conta fixa' : 'Salvar boleto'; });
+
   document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
     filtro = t.dataset.f;
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-pressed', x === t));
@@ -1041,6 +1183,13 @@
       valor: $('fVal').value === '' ? null : Number($('fVal').value), linha: linhaTxt, pix
     };
     const b = $('salvarAdd'); b.disabled = true; b.textContent = 'Salvando…';
+    if ($('fFixa').checked) {
+      if (!campos.vencimento) { b.disabled = false; b.textContent = 'Salvar conta fixa'; toast('Informe o vencimento'); return; }
+      const okF = await atualizar('adicionarFixa', [{ nome: campos.fornecedor, valor: campos.valor, vencimento: campos.vencimento, obs: campos.obs }]);
+      b.disabled = false; b.textContent = 'Salvar conta fixa';
+      if (okF) { dlg.close(); $('fFixa').checked = false; $('fFixaNota').hidden = true; b.textContent = 'Salvar boleto'; toast('Conta fixa criada: vai se repetir todo dia ' + Number(campos.vencimento.slice(8, 10))); }
+      return;
+    }
     const ok = await atualizar('adicionarManual', [campos],
       { acao: 'adicionar', forn: campos.fornecedor, obs: campos.obs, venc: campos.vencimento,
         val: campos.valor ?? '', linha: campos.linha, pix: campos.pix });
@@ -1058,7 +1207,17 @@
       <li><div><b>${esc(f.nome)}</b><span>${esc(f.email)}${f.assunto ? ' · assunto: "' + esc(f.assunto) + '"' : ''}${f.dia ? ' · vence dia ' + esc(f.dia) : ''}</span></div>
       <button class="x" type="button" data-i="${i}">Remover</button></li>`).join('')
       : '<li><div><span>Nenhuma empresa cadastrada ainda.</span></div></li>';
+    $('fixaList').innerHTML = fixas.length ? fixas.map(f => `
+      <li><div><b>${esc(f.nome)}</b><span>todo dia ${f.dia}${f.valor != null ? ' · ' + brl(f.valor) : ''}${f.obs ? ' · ' + esc(f.obs) : ''}</span></div>
+      <button class="x" type="button" data-fixa="${esc(f.id)}">Parar</button></li>`).join('')
+      : '<li><div><span>Nenhuma. Para criar, toque em + e marque "Repete todo mês".</span></div></li>';
   }
+  $('fixaList').addEventListener('click', async ev => {
+    const b = ev.target.closest('button[data-fixa]'); if (!b) return;
+    const f = fixas.find(x => x.id === b.dataset.fixa);
+    if (!f || !confirm('Parar de criar a conta "' + f.nome + '" todo mês?\nAs que já estão na lista continuam.')) return;
+    b.disabled = true; await atualizar('pararFixa', [f.id]);
+  });
   $('btnForn').addEventListener('click', () => { renderForn(); dlgF.showModal(); });
   $('fecharForn').addEventListener('click', () => dlgF.close());
   $('fornList').addEventListener('click', async ev => {
@@ -1080,7 +1239,7 @@
   // ---------- Entrar / sair ----------
   function aplicarEstado(r) {
     contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || [];
-    esperadas = r.esperadas || []; render(); renderForn();
+    esperadas = r.esperadas || []; empresas = r.empresas || {}; fixas = r.fixas || []; render(); renderForn();
     setTimeout(autoPix, 1500);
     const s = lerSessao(); $('quemSou').textContent = s ? 'Conectado como ' + s.email : '';
   }
@@ -1166,7 +1325,7 @@
     if (!confirm('Sair da sua conta neste aparelho?')) return;
     try { await chamar('sair'); } catch (e) {}
     gravarSessao(null); try { dlgF.close(); } catch (e) {}
-    contas = []; sugestoes = []; esperadas = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
+    contas = []; sugestoes = []; esperadas = []; empresas = {}; fixas = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
   }
   $('btnSair').addEventListener('click', sairDaConta);
   $('btnSairTopo').addEventListener('click', sairDaConta);
