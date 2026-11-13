@@ -333,7 +333,8 @@ function estado(msg) {
   let esperadas = [];
   try { esperadas = analisarPadroes(contas); } catch (e) { console.warn('Padrões: ' + e); }
   return { contas: contas, fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes,
-           esperadas: esperadas, empresas: lerConfigEmpresas(), fixas: getFixas(), msg: msg || '' };
+           esperadas: esperadas, empresas: lerConfigEmpresas(), fixas: getFixas(),
+           comprovantes: getRemetentesComprovante(), msg: msg || '' };
 }
 
 function adicionarFornecedor(f) {
@@ -462,6 +463,10 @@ const FUNCOES_API = {
   adicionarFixa:       (f) => { adicionarFixa(f); return estado(''); },
   pararFixa:           (id) => { pararFixa(id); return estado(''); },
   getXml:              (id) => getXml(id),
+  marcarXmlLancado:    (id, sim) => { marcarXml(id, 18, sim ? new Date() : ''); return getXmls(); },
+  getComprovantes:     () => getRemetentesComprovante(),
+  adicionarComprovante:(r) => { adicionarRemetenteComprovante(r); return getRemetentesComprovante(); },
+  removerComprovante:  (email) => { removerRemetenteComprovante(email); return getRemetentesComprovante(); },
   buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
 };
 const DIAS_SESSAO = 180;
@@ -830,6 +835,7 @@ function buscarBoletosSemTrava() {
   registrarCaixa(novas.length);
   try { buscarSugestoesSeHoje(); } catch (e) { console.warn('Sugestões: ' + e); }
   try { pagarAutomaticas(); } catch (e) { console.warn('Automáticas: ' + e); }
+  try { darBaixaPorComprovantes(); } catch (e) { console.warn('Comprovantes: ' + e); }
   try { limparHistorico(); } catch (e) { console.warn('Histórico: ' + e); }
   try { gerarContasFixas(); } catch (e) { console.warn('Contas fixas: ' + e); }
   try { buscarXmlsDaRodada(); } catch (e) { console.warn('XMLs: ' + e); }
@@ -1284,7 +1290,7 @@ const ABA_XML = 'XMLs';
 const ABA_XML_ARQ = 'XMLs (arquivos)';
 const CAB_XML = ['ID', 'Recebido em', 'Tipo', 'Número', 'Emitente', 'CNPJ/CPF do emitente', 'Destinatário',
                  'Valor', 'Emitida em', 'Chave de acesso', 'Arquivo', 'Remetente', 'Assunto', 'Link do e-mail',
-                 'Conta que recebeu', 'Arquivo no Drive'];
+                 'Conta que recebeu', 'Arquivo no Drive', 'Baixado em', 'Lançado na contabilidade em'];
 const XML_DIAS_INICIO = 90;   // na primeira busca olha 90 dias para trás
 const XML_DIAS_ROTINA = 7;    // nas seguintes, a última semana
 const XML_PASTA = 'Central dos Boletos - XMLs';
@@ -1299,6 +1305,10 @@ function abaXml() {
     aba.setFrozenRows(1);
     aba.getRange('H2:H').setNumberFormat('R$ #,##0.00');
     ['D2:D', 'F2:F', 'J2:J'].forEach(a => aba.getRange(a).setNumberFormat('@')); // número, CNPJ e chave como texto
+  }
+  if (aba.getLastColumn() < CAB_XML.length || aba.getRange(1, CAB_XML.length).getValue() === '') {
+    aba.getRange(1, 1, 1, CAB_XML.length).setValues([CAB_XML]).setFontWeight('bold');
+    aba.getRange('Q2:R').setNumberFormat('dd/mm/yyyy hh:mm');
   }
   return aba;
 }
@@ -1636,7 +1646,9 @@ function getXmls() {
     id: String(r[0]), recebido: fmt(r[1]), tipo: String(r[2]), numero: String(r[3]), emitente: String(r[4]),
     cnpj: String(r[5]), destinatario: String(r[6]), valor: typeof r[7] === 'number' ? r[7] : null,
     emissao: fmt(r[8]), chave: String(r[9]), arquivo: String(r[10]), remetente: String(r[11]),
-    assunto: String(r[12]), link: String(r[13]), conta: String(r[14]), drive: String(r[15])
+    assunto: String(r[12]), link: String(r[13]), conta: String(r[14]), drive: String(r[15]),
+    baixado: r[16] instanceof Date ? Utilities.formatDate(r[16], tz, "yyyy-MM-dd'T'HH:mm") : '',
+    lancado: r[17] instanceof Date ? Utilities.formatDate(r[17], tz, "yyyy-MM-dd'T'HH:mm") : ''
   })).sort((a, b) => ((b.emissao || b.recebido) > (a.emissao || a.recebido) ? 1 : -1));
 }
 
@@ -1648,7 +1660,8 @@ function getXml(id) {
     if (i >= 0) {
       const lin = aba.getRange(i + 2, 1, 1, aba.getLastColumn()).getValues()[0];
       const reg = getXmls().find(x => x.id === String(id));
-      return { nome: reg ? reg.arquivo : 'nota.xml', conteudo: lin.slice(1).join('') };
+      const quando = marcarXml(id, 17, new Date());          // registra o download
+      return { nome: reg ? reg.arquivo : 'nota.xml', conteudo: lin.slice(1).join(''), baixado: quando };
     }
   }
   throw new Error('Não encontrei o conteúdo deste XML.');
@@ -1899,4 +1912,117 @@ function gerarContasFixas(hojeTeste) {
     contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).sort({ column: 3, ascending: true });
   }
   return novas.length;
+}
+
+// Grava data/hora numa coluna da aba XMLs (17 = baixado, 18 = lançado na contabilidade)
+function marcarXml(id, coluna, valor) {
+  const aba = abaXml();
+  if (aba.getLastRow() < 2) return '';
+  const ids = aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues().map(r => String(r[0]));
+  const i = ids.indexOf(String(id));
+  if (i < 0) throw new Error('Nota não encontrada.');
+  aba.getRange(i + 2, coluna).setValue(valor);
+  return valor instanceof Date ? Utilities.formatDate(valor, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm") : '';
+}
+
+// ===================== BAIXA AUTOMÁTICA PELO COMPROVANTE =====================
+// Quando o banco manda o comprovante por e-mail, a conta correspondente é marcada como paga.
+// Os remetentes ficam na aba "Comprovantes" da planilha principal (as contas extras também leem).
+// Casamento: 1) pelo código do boleto (linha digitável / código de barras) que aparecer no comprovante;
+//            2) se não houver código, pelo valor exato, quando só uma conta em aberto tiver esse valor
+//               e vencer até 10 dias antes ou depois do pagamento.
+const ABA_COMPROV = 'Comprovantes';
+function abaComprovantes() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_COMPROV);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_COMPROV);
+    aba.getRange(1, 1, 1, 3).setValues([['E-mail do banco', 'Palavra no assunto (opcional)', 'Nome']]).setFontWeight('bold');
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+function getRemetentesComprovante() {
+  const aba = planilha().getSheetByName(ABA_COMPROV);
+  if (!aba || aba.getLastRow() < 2) return [];
+  return aba.getRange(2, 1, aba.getLastRow() - 1, 3).getValues().filter(r => r[0])
+    .map(r => ({ email: String(r[0]).trim().toLowerCase(), assunto: String(r[1] || ''), nome: String(r[2] || '') }));
+}
+function adicionarRemetenteComprovante(r) {
+  const email = String(r.email || '').trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('E-mail inválido.');
+  if (getRemetentesComprovante().some(x => x.email === email && x.assunto === String(r.assunto || ''))) return;
+  abaComprovantes().appendRow([email, String(r.assunto || '').slice(0, 80), String(r.nome || '').slice(0, 40)]);
+}
+function removerRemetenteComprovante(email) {
+  const aba = planilha().getSheetByName(ABA_COMPROV);
+  if (!aba || aba.getLastRow() < 2) return;
+  const vals = aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues();
+  for (let i = vals.length - 1; i >= 0; i--) if (String(vals[i][0]).trim().toLowerCase() === String(email).toLowerCase()) aba.deleteRow(i + 2);
+}
+
+function darBaixaPorComprovantes() {
+  const rem = getRemetentesComprovante();
+  if (!rem.length) return 0;
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  if (!contas || contas.getLastRow() < 2) return 0;
+  const lidos = new Set(lerIdsArquivados());
+  const vals = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues();
+  let n = 0;
+  rem.forEach(r => {
+    const q = 'from:' + r.email + (r.assunto ? ' subject:"' + r.assunto.replace(/"/g, '') + '"' : '') + ' newer_than:10d';
+    GmailApp.search(q, 0, 30).forEach(th => th.getMessages().forEach(msg => {
+      const idc = 'comp-' + msg.getId();
+      if (lidos.has(idc)) return;
+      const comp = lerComprovante(msg.getPlainBody() || '', msg.getSubject() || '');
+      const i = acharContaDoComprovante(vals, comp, msg.getDate());
+      if (i >= 0) {
+        contas.getRange(i + 2, 6).setValue('Pago');
+        contas.getRange(i + 2, 12).setValue((vals[i][11] ? vals[i][11] + ' · ' : '') + 'baixa pelo comprovante de ' +
+          Utilities.formatDate(msg.getDate(), Session.getScriptTimeZone(), 'dd/MM'));
+        contas.getRange(i + 2, 14).setValue(msg.getDate());
+        vals[i][5] = 'Pago';
+        n++;
+      }
+      arquivarIds([idc]);   // não lê o mesmo comprovante de novo
+      lidos.add(idc);
+    }));
+  });
+  return n;
+}
+
+// Extrai do texto do comprovante: códigos de boleto (44 a 48 dígitos) e o valor pago
+function lerComprovante(texto, assunto) {
+  const t = (assunto + '\n' + texto).replace(/ /g, ' ');
+  const codigos = (t.match(/(?:\d[\d.\s-]{42,70}\d)/g) || []).map(s => s.replace(/\D/g, '')).filter(s => s.length >= 44 && s.length <= 48);
+  let valor = null;
+  const m = t.match(/(?:valor(?:\s+(?:pago|total|do pagamento|cobrado))?|total)\s*:?\s*R\$\s*([\d.]+,\d{2})/i) ||
+            t.match(/R\$\s*([\d.]+,\d{2})/);
+  if (m) valor = Number(m[1].replace(/\./g, '').replace(',', '.'));
+  return { codigos: codigos, valor: valor };
+}
+function acharContaDoComprovante(vals, comp, dataPag) {
+  const abertas = vals.map((r, i) => ({ r: r, i: i })).filter(x => x.r[5] !== 'Pago');
+  // 1) pelo código do boleto (compara os dígitos; linha digitável ou código de barras)
+  for (const cod of comp.codigos) {
+    const achou = abertas.find(x => {
+      const dig = String(x.r[4]).replace(/\D/g, '');
+      if (!dig) return false;
+      if (dig === cod) return true;
+      const barras = dig.length === 47 ? linhaParaBarras(dig) : '';
+      return barras && barras === cod;
+    });
+    if (achou) return achou.i;
+  }
+  // 2) pelo valor exato, se só uma conta bater
+  if (comp.valor) {
+    const cands = abertas.filter(x => typeof x.r[3] === 'number' && Math.abs(x.r[3] - comp.valor) < 0.005 &&
+      (!(x.r[2] instanceof Date) || Math.abs(x.r[2] - dataPag) <= 10 * 864e5));
+    if (cands.length === 1) return cands[0].i;
+  }
+  return -1;
+}
+// Linha digitável de 47 dígitos -> código de barras de 44
+function linhaParaBarras(l) {
+  return l.length !== 47 ? '' : l.slice(0, 4) + l.slice(32, 47) + l.slice(4, 9) + l.slice(10, 20) + l.slice(21, 31);
 }

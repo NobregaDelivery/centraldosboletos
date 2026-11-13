@@ -214,6 +214,11 @@
     background: var(--card); color: var(--ink); font: inherit; }
   .xml-topo .btn { flex: 0 0 auto; }
   .card.xml .who span { display: block; }
+  .xml-status { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0 14px 6px; font-size: 12.5px; color: var(--muted); }
+  .xml-status .sim { color: var(--ok); font-weight: 600; }
+  .xml-status .nao { color: var(--soon); font-weight: 600; }
+  .card.xml .links { padding: 0 14px 12px; }
+  .card.lancada { opacity: .78; }
   .card.xml .actions .btn { white-space: nowrap; font-size: 13px; padding: 9px 6px; min-width: 0; }
   body.modo-xml .fab { display: none; }
   a.btn { text-decoration: none; }
@@ -347,6 +352,16 @@
   <ul class="forn-list" id="fornList"></ul>
   <p class="sec">Contas fixas (repetem todo mês)</p>
   <ul class="forn-list" id="fixaList"></ul>
+  <p class="sec">Comprovantes de pagamento (baixa automática)</p>
+  <ul class="forn-list" id="compList"></ul>
+  <form class="add" id="formComp">
+    <div class="row2">
+      <label>E-mail do banco<input id="cpEmail" type="email" placeholder="comprovante@banco.com.br" required></label>
+      <label>Palavra no assunto<input id="cpAssunto" maxlength="80" placeholder="Ex.: Comprovante"></label>
+    </div>
+    <p class="note">Quando chegar um comprovante desse e-mail, a conta é marcada como paga: pelo código do boleto, ou pelo valor quando só uma conta em aberto tiver esse valor. Se ficar em dúvida, não mexe em nada.</p>
+    <button class="btn" type="submit" id="salvarComp">Adicionar e-mail de comprovante</button>
+  </form>
   <p class="sec">Nova empresa</p>
   <form class="add" id="formForn">
     <label>Nome da empresa *<input id="nNome" required maxlength="60" placeholder="Ex.: Vivo, Condomínio"></label>
@@ -792,7 +807,7 @@
     document.querySelectorAll('.card.open .qr[data-pix]').forEach(el => desenharQr(el, el.dataset.pix));
   }
 
-  let fornecedores = [], caixas = [], sugestoes = [], esperadas = [], empresas = {}, fixas = [];
+  let fornecedores = [], caixas = [], sugestoes = [], esperadas = [], empresas = {}, fixas = [], comprovantes = [];
   const MESES_CAL = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
   const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   // Itens do calendário: contas (pagas e a pagar), esperadas deste mês e contas fixas projetadas nos meses à frente
@@ -862,6 +877,7 @@
       if (Array.isArray(r)) contas = r;
       else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; sugestoes = r.sugestoes || sugestoes;
              esperadas = r.esperadas || esperadas; empresas = r.empresas || empresas; fixas = r.fixas || fixas;
+             comprovantes = r.comprovantes || comprovantes;
              renderForn(); if (r.msg) toast(r.msg); }
       render(); return true;
     } catch (e) {
@@ -938,7 +954,7 @@
   }
 
   // ---------- Notas fiscais em XML ----------
-  let xmls = null, xmlBusca = '', xmlCarregando = false;
+  let xmls = null, xmlBusca = '', xmlCarregando = false, xmlFiltro = '';
   const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
   async function carregarXmls(forcar) {
     if (xmlCarregando || (xmls && !forcar)) return;
@@ -955,18 +971,27 @@
     const quando = x.emissao ? 'emitida ' + dataBR(x.emissao) : 'recebida ' + dataBR(x.recebido);
     const desc = evento ? x.tipo.replace('Evento: ', '') + (x.numero ? ' da nota nº ' + x.numero : '')
                : x.tipo + (x.numero ? ' nº ' + x.numero : '');
+    const hm = s => s ? dataBR(s.slice(0, 10)) + ' ' + s.slice(11, 16) : '';
     return `
-    <article class="card xml ${cancelada ? 'late' : evento ? 'soon' : 'later'}" data-xml="${esc(x.id)}">
+    <article class="card xml ${x.lancado ? 'paid lancada' : cancelada ? 'late' : evento ? 'soon' : 'later'}" data-xml="${esc(x.id)}">
       <div class="main-row">
         <div class="who"><b>${esc(x.emitente || nomeDoRemetente(x.remetente) || x.remetente || x.arquivo)}</b>
           <span>${esc(desc)} · ${esc(quando)}${x.cnpj ? '<br>CNPJ ' + esc(fmtDoc(x.cnpj)) : ''}</span></div>
         <div class="amount"><b class="num">${x.valor != null ? brl(x.valor) : ''}</b>
-          <span class="badge">${cancelada ? 'Cancelada' : esc(evento ? 'Evento' : x.tipo)}</span></div>
+          <span class="badge">${x.lancado ? 'Lançada' : cancelada ? 'Cancelada' : esc(evento ? 'Evento' : x.tipo)}</span></div>
+      </div>
+      <div class="xml-status">
+        <span class="${x.baixado ? 'sim' : ''}">${x.baixado ? '⬇ Baixado em ' + esc(hm(x.baixado)) : 'Ainda não baixado'}</span>
+        <span class="${x.lancado ? 'sim' : 'nao'}">${x.lancado ? '✓ Lançado na contabilidade em ' + esc(hm(x.lancado)) : 'Falta lançar na contabilidade'}</span>
       </div>
       <div class="actions">
         <button class="btn" data-xact="baixar">${ICON_DOWN}Baixar XML</button>
-        ${/^\d{44}$/.test(x.chave) ? `<button class="btn" data-xact="chave">${ICON_COPY}Copiar chave</button>` : ''}
-        ${x.link ? `<a class="btn" href="${esc(x.link)}" target="_blank" rel="noopener">Abrir e-mail</a>` : ''}
+        ${x.lancado ? `<button class="btn" data-xact="desfazer">Desfazer lançado</button>`
+                    : `<button class="btn primary" data-xact="lancar">${ICON_OK}Marcar lançado</button>`}
+      </div>
+      <div class="links">
+        ${/^\d{44}$/.test(x.chave) ? `<button data-xact="chave">Copiar chave de acesso</button>` : ''}
+        ${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">Abrir e-mail</a>` : ''}
       </div>
     </article>`;
   }
@@ -978,6 +1003,11 @@
     const topo = `<div class="xml-topo">
         <input type="search" id="xmlBusca" placeholder="Buscar por empresa, número ou CNPJ" value="${esc(xmlBusca)}" aria-label="Buscar notas">
         <button class="btn" type="button" id="xmlAgora">Buscar XMLs agora</button>
+      </div>
+      <div class="seg" id="segXml" role="group" aria-label="Mostrar notas" style="margin-top:10px">
+        <button data-xf="" aria-pressed="${!xmlFiltro}">Todas</button>
+        <button data-xf="falta" aria-pressed="${xmlFiltro === 'falta'}">Falta lançar${xmls ? ' (' + xmls.filter(x => !x.lancado).length + ')' : ''}</button>
+        <button data-xf="lancadas" aria-pressed="${xmlFiltro === 'lancadas'}">Lançadas</button>
       </div>`;
     if (!xmls) {
       $('list').innerHTML = topo + '<div class="skeleton"></div><div class="skeleton"></div>';
@@ -985,7 +1015,7 @@
     }
     const canceladas = new Set(xmls.filter(x => /^Evento/.test(x.tipo) && /cancel/i.test(x.tipo)).map(x => x.chave));
     const t = xmlBusca.trim().toLowerCase(), td = t.replace(/\D/g, '');
-    const lista = xmls.filter(x => !t || [x.emitente, x.remetente, x.numero, x.tipo, x.arquivo, x.destinatario].join(' ').toLowerCase().includes(t)
+    const lista = xmls.filter(x => !xmlFiltro || (xmlFiltro === 'falta' ? !x.lancado : !!x.lancado)).filter(x => !t || [x.emitente, x.remetente, x.numero, x.tipo, x.arquivo, x.destinatario].join(' ').toLowerCase().includes(t)
                                           || (td.length >= 3 && (x.cnpj + x.chave).includes(td)));
     const nota = '<p class="hist-nota">Aqui aparecem os arquivos XML (NF-e, NFS-e, CT-e…) que chegaram nos seus e-mails. Cada um também é guardado no seu Google Drive, na pasta <b>Central dos Boletos - XMLs</b>, separado por mês.</p>';
     if (!lista.length) {
@@ -993,16 +1023,19 @@
       ligarTopoXml(); return;
     }
     const grupos = {};
+    const hmTxt = s => dataBR(s.slice(0, 10)) + ' às ' + s.slice(11, 16);
     lista.forEach(x => { const k = (x.emissao || x.recebido || '').slice(0, 7) || 'sem data'; (grupos[k] = grupos[k] || []).push(x); });
     $('list').innerHTML = topo + nota + Object.keys(grupos).sort().reverse().map(k => {
       const arr = grupos[k];
       const tot = arr.filter(x => x.valor != null && !/^Evento/.test(x.tipo) && !canceladas.has(x.chave)).reduce((s, x) => s + x.valor, 0);
       const nome = k === 'sem data' ? 'Sem data' : MESES[+k.slice(5, 7) - 1] + ' de ' + k.slice(0, 4);
-      return `<h2><span>${nome} · ${arr.length} nota(s)</span><span class="num">${brl(tot)}</span></h2>` + arr.map(x => xmlHTML(x, canceladas)).join('');
+      const falta = arr.filter(x => !x.lancado).length;
+      return `<h2><span>${nome} · ${arr.length} nota(s)${falta && xmlFiltro !== 'falta' ? ' · ' + falta + ' a lançar' : ''}</span><span class="num">${brl(tot)}</span></h2>` + arr.map(x => xmlHTML(x, canceladas)).join('');
     }).join('');
     ligarTopoXml();
   }
   function ligarTopoXml() {
+    $('segXml').addEventListener('click', ev => { const s = ev.target.closest('button'); if (!s) return; xmlFiltro = s.dataset.xf; renderXml(); });
     const b = $('xmlBusca');
     b.addEventListener('input', () => { xmlBusca = b.value; const pos = b.selectionStart; renderXml(); const n = $('xmlBusca'); n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} });
     $('xmlAgora').addEventListener('click', async () => {
@@ -1019,15 +1052,29 @@
       const x = (xmls || []).find(i => i.id === xb.closest('.card').dataset.xml);
       if (!x) return;
       if (xb.dataset.xact === 'chave') { await copiar(x.chave); toast('Chave de acesso copiada'); return; }
+      const hmTxt = s => dataBR(s.slice(0, 10)) + ' às ' + s.slice(11, 16);
+      if (xb.dataset.xact === 'lancar' || xb.dataset.xact === 'desfazer') {
+        const sim = xb.dataset.xact === 'lancar';
+        if (!sim && !confirm('Desmarcar "lançado na contabilidade" desta nota?')) return;
+        xb.disabled = true;
+        try { xmls = await chamar('marcarXmlLancado', x.id, sim); toast(sim ? 'Nota marcada como lançada' : 'Nota voltou para "falta lançar"'); }
+        catch (e) { toast(e.message); xb.disabled = false; }
+        renderXml(); return;
+      }
+      if (x.lancado && !confirm('Esta nota já foi lançada na contabilidade em ' + hmTxt(x.lancado) + '.\nBaixar de novo mesmo assim?')) return;
+      const jaBaixado = x.baixado;
       const txt = xb.innerHTML; xb.disabled = true; xb.textContent = 'Baixando…';
       try {
         const r = await chamar('getXml', x.id);
+        if (r.baixado) x.baixado = r.baixado;
+        if (jaBaixado && !x.lancado) toast('Atenção: esta nota já tinha sido baixada em ' + hmTxt(jaBaixado));
         const url = URL.createObjectURL(new Blob([r.conteudo], { type: 'application/xml' }));
         const a = document.createElement('a'); a.href = url; a.download = r.nome || 'nota.xml';
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
       } catch (e) { toast(e.message); }
       xb.disabled = false; xb.innerHTML = txt;
+      renderXml();
       return;
     }
     const eb = ev.target.closest('[data-eact]');
@@ -1211,7 +1258,25 @@
       <li><div><b>${esc(f.nome)}</b><span>todo dia ${f.dia}${f.valor != null ? ' · ' + brl(f.valor) : ''}${f.obs ? ' · ' + esc(f.obs) : ''}</span></div>
       <button class="x" type="button" data-fixa="${esc(f.id)}">Parar</button></li>`).join('')
       : '<li><div><span>Nenhuma. Para criar, toque em + e marque "Repete todo mês".</span></div></li>';
+    $('compList').innerHTML = comprovantes.length ? comprovantes.map(c => `
+      <li><div><b>${esc(c.email)}</b><span>${c.assunto ? 'assunto com "' + esc(c.assunto) + '"' : 'qualquer assunto'}</span></div>
+      <button class="x" type="button" data-comp="${esc(c.email)}">Remover</button></li>`).join('')
+      : '<li><div><span>Nenhum ainda. Quando seu banco começar a mandar comprovantes por e-mail, cadastre o endereço aqui.</span></div></li>';
   }
+  $('formComp').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const b = $('salvarComp'); b.disabled = true;
+    try { comprovantes = await chamar('adicionarComprovante', { email: $('cpEmail').value.trim(), assunto: $('cpAssunto').value.trim() });
+          $('formComp').reset(); renderForn(); toast('E-mail de comprovante cadastrado'); }
+    catch (e) { toast(e.message); }
+    b.disabled = false;
+  });
+  $('compList').addEventListener('click', async ev => {
+    const b = ev.target.closest('button[data-comp]'); if (!b) return;
+    if (!confirm('Parar de dar baixa pelos comprovantes de ' + b.dataset.comp + '?')) return;
+    b.disabled = true;
+    try { comprovantes = await chamar('removerComprovante', b.dataset.comp); renderForn(); } catch (e) { toast(e.message); b.disabled = false; }
+  });
   $('fixaList').addEventListener('click', async ev => {
     const b = ev.target.closest('button[data-fixa]'); if (!b) return;
     const f = fixas.find(x => x.id === b.dataset.fixa);
@@ -1239,7 +1304,8 @@
   // ---------- Entrar / sair ----------
   function aplicarEstado(r) {
     contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || [];
-    esperadas = r.esperadas || []; empresas = r.empresas || {}; fixas = r.fixas || []; render(); renderForn();
+    esperadas = r.esperadas || []; empresas = r.empresas || {}; fixas = r.fixas || []; comprovantes = r.comprovantes || [];
+    render(); renderForn();
     setTimeout(autoPix, 1500);
     const s = lerSessao(); $('quemSou').textContent = s ? 'Conectado como ' + s.email : '';
   }
@@ -1325,7 +1391,7 @@
     if (!confirm('Sair da sua conta neste aparelho?')) return;
     try { await chamar('sair'); } catch (e) {}
     gravarSessao(null); try { dlgF.close(); } catch (e) {}
-    contas = []; sugestoes = []; esperadas = []; empresas = {}; fixas = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
+    contas = []; sugestoes = []; esperadas = []; empresas = {}; fixas = []; comprovantes = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
   }
   $('btnSair').addEventListener('click', sairDaConta);
   $('btnSairTopo').addEventListener('click', sairDaConta);
