@@ -1319,6 +1319,7 @@ function buscarXmlsComTrava(dias) {
     removerXmlsRepetidos();
     try { relerXmlsSemDados(); } catch (e) { console.warn(e); }
     try { parcelasDosXmlsAntigos(); } catch (e) { console.warn('Parcelas antigas: ' + e); }
+    try { renomearContasDaNota(); } catch (e) { console.warn('Renomear: ' + e); }
     return buscarXmls(dias);
   } finally { lock.releaseLock(); }
 }
@@ -1425,13 +1426,12 @@ function criarContasDasParcelas(itens) {
   const vals = n > 0 ? contas.getRange(2, 1, n, CAB_CONTAS.length).getValues() : [];
   const ids = new Set(vals.map(r => String(r[9])));
   lerIdsArquivados().forEach(i => ids.add(i));
-  const nomePorEmail = {};
-  getFornecedores().forEach(f => { if (f.email) nomePorEmail[f.email.toLowerCase()] = f.nome; });
+  const acharNome = nomeDoFornecedor();
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
   const novas = [];
   itens.forEach(it => {
     const d = it.d, total = d.parcelas.length;
-    const nome = nomePorEmail[it.remetente] || nomeCurto(d.emitente) || it.remetente;
+    const nome = acharNome(it.remetente) || nomeCurto(d.emitente) || it.remetente;
     d.parcelas.forEach(p => {
       if (p.venc < hoje) return;                               // parcela antiga: não cobra
       const id = 'nfe-' + d.chave + '-' + p.n;
@@ -1453,6 +1453,43 @@ function criarContasDasParcelas(itens) {
   }
   return novas.length;
 }
+// Nome cadastrado da empresa pelo e-mail exato ou, se não houver, pelo domínio (ex.: @ultragaz.com.br)
+const DOMINIOS_COMUNS = /^(gmail|googlemail|hotmail|outlook|live|yahoo|icloud|uol|bol|terra|ig)\./;
+function nomeDoFornecedor() {
+  const porEmail = {}, porDominio = {};
+  getFornecedores().forEach(f => {
+    const e = String(f.email || '').toLowerCase().trim();
+    if (!e) return;
+    if (!porEmail[e]) porEmail[e] = f.nome;
+    const dom = e.split('@')[1];
+    if (dom && !DOMINIOS_COMUNS.test(dom) && !porDominio[dom]) porDominio[dom] = f.nome;
+  });
+  return email => {
+    const e = String(email || '').toLowerCase().trim();
+    return porEmail[e] || porDominio[e.split('@')[1]] || '';
+  };
+}
+
+// Uma vez só: corrige o nome das contas criadas pela NF-e usando o domínio do remetente
+function renomearContasDaNota() {
+  const props = PropertiesService.getScriptProperties();
+  if (CONFIG.PLANILHA_PRINCIPAL || props.getProperty('RENOMEAR_NFE_OK')) return;
+  const contas = planilha().getSheetByName(ABA_CONTAS), xml = planilha().getSheetByName(ABA_XML);
+  if (contas && xml && contas.getLastRow() > 1 && xml.getLastRow() > 1) {
+    const remPorChave = {};
+    xml.getRange(2, 1, xml.getLastRow() - 1, CAB_XML.length).getValues().forEach(r => { if (r[9]) remPorChave[String(r[9])] = String(r[11]); });
+    const acharNome = nomeDoFornecedor();
+    const vals = contas.getRange(2, 1, contas.getLastRow() - 1, 10).getValues();
+    vals.forEach((r, i) => {
+      const m = String(r[9]).match(/^nfe-(\d{44})-/);
+      if (!m) return;
+      const nome = acharNome(remPorChave[m[1]]);
+      if (nome && nome !== r[0]) contas.getRange(i + 2, 1).setValue(nome);
+    });
+  }
+  props.setProperty('RENOMEAR_NFE_OK', '1');
+}
+
 function mesmaConta(valorA, vencA, valorB, vencB) {
   if (typeof valorA !== 'number' || typeof valorB !== 'number') return false;
   if (Math.abs(valorA - valorB) > 0.009) return false;
