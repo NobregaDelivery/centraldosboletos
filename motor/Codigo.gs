@@ -329,7 +329,11 @@ function estado(msg) {
   try { caixas = getCaixas(); } catch (e) {}
   let sugestoes = [];
   try { sugestoes = getSugestoes(); } catch (e) {}
-  return { contas: getContas(), fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes, msg: msg || '' };
+  const contas = getContas();
+  let esperadas = [];
+  try { esperadas = analisarPadroes(contas); } catch (e) { console.warn('Padrões: ' + e); }
+  return { contas: contas, fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes,
+           esperadas: esperadas, msg: msg || '' };
 }
 
 function adicionarFornecedor(f) {
@@ -444,15 +448,16 @@ function atualizarConta(id, campos) {
 const FUNCOES_API = {
   estado:              () => estado(''),
   buscarAgora:         () => { const n = buscarBoletos(); return estado(n > 0 ? n + ' boleto(s) novo(s)' : 'Nenhum boleto novo'); },
-  atualizarConta:      (id, campos) => atualizarConta(id, campos),
-  adicionarManual:     (c) => adicionarManual(c),
-  excluirConta:        (id) => excluirConta(id),
+  atualizarConta:      (id, campos) => { atualizarConta(id, campos); return estado(''); },
+  adicionarManual:     (c) => { adicionarManual(c); return estado(''); },
+  excluirConta:        (id) => { excluirConta(id); return estado(''); },
   getPdfs:             (id) => getPdfs(id),
   adicionarFornecedor: (f) => adicionarFornecedor(f),
   removerFornecedor:   (email, assunto) => removerFornecedor(email, assunto),
   aceitarSugestao:     (id, nome) => aceitarSugestao(id, nome),
   ignorarSugestao:     (id) => ignorarSugestao(id),
   getXmls:             () => getXmls(),
+  dispensarEsperada:   (chave, mes) => { dispensarEsperada(chave, mes); return estado(''); },
   getXml:              (id) => getXml(id),
   buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
 };
@@ -735,8 +740,8 @@ function buscarBoletosSemTrava() {
   garantirCabecalho(contas);
 
   const ultima = contas.getLastRow();
-  const idsJaLidos = new Set(ultima > 1
-    ? contas.getRange(2, 10, ultima - 1, 1).getValues().map(r => String(r[0])) : []);
+  const vals = ultima > 1 ? contas.getRange(2, 1, ultima - 1, CAB_CONTAS.length).getValues() : [];
+  const idsJaLidos = new Set(vals.map(r => String(r[9])));
   lerIdsArquivados().forEach(i => idsJaLidos.add(i)); // pagos já apagados do histórico e contas excluídas
 
   const fornecedores = forn.getLastRow() > 1
@@ -791,6 +796,18 @@ function buscarBoletosSemTrava() {
 
         const link = 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(minhaConta()) +
                      '#all/' + msg.getThread().getId();
+        // Já existe a conta criada pela NF-e (mesmo valor, vencimento parecido)? Completa ela com o boleto.
+        const daNota = dados.valor && dados.vencimento ? vals.findIndex(r => String(r[8]).indexOf('XML da NF-e') === 0 &&
+          r[5] !== 'Pago' && mesmaConta(r[3], r[2], dados.valor, dados.vencimento)) : -1;
+        if (daNota >= 0) {
+          const l = daNota + 2, r = vals[daNota];
+          contas.getRange(l, 2, 1, 12).setValues([[msg.getDate(), dados.vencimento, dados.valor, dados.linha || '', r[5],
+            msg.getSubject(), link, 'XML da NF-e + ' + origem, r[9], dados.pix || r[10] || '', r[6], r[12] || contaDestino(msg)]]);
+          vals[daNota][8] = 'XML da NF-e + ' + origem;
+          arquivarIds([id]);                                     // este e-mail já foi aproveitado
+          idsJaLidos.add(id);
+          return;
+        }
         novas.push([nome, msg.getDate(), dados.vencimento || '', dados.valor || '',
                     dados.linha || '', 'A pagar', msg.getSubject(), link, origem, id,
                     dados.pix || '', '', contaDestino(msg), '']);
@@ -860,6 +877,7 @@ function limparHistorico() {
     if (r[13].getTime() < limite) apagar.push(i + 2);
   });
   if (!apagar.length) return 0;
+  guardarNoHistorico(apagar.map(l => vals[l - 2]));
   arquivarIds(apagar.map(l => String(vals[l - 2][9])));
   apagar.reverse().forEach(l => contas.deleteRow(l));
   // IDs arquivados há mais de 120 dias já estão fora da janela de busca: pode limpar
@@ -1204,7 +1222,13 @@ function enviarAlerta() {
   const linhas = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues()
     .filter(r => r[5] !== 'Pago')
     .filter(r => !(r[2] instanceof Date) || r[2] <= limite);
-  if (!linhas.length) return;
+  let esperadas = [], aumentos = {};
+  try {
+    const lista = getContas();
+    esperadas = analisarPadroes(lista).filter(e => e.faltam <= 3);
+    lista.forEach(x => { if (x.aumento) aumentos[x.id] = x.aumento; });
+  } catch (e) { console.warn('Padrões no alerta: ' + e); }
+  if (!linhas.length && !esperadas.length) return;
 
   const html = linhas.map(r => {
     const venc = r[2] instanceof Date ? r[2] : null;
@@ -1213,18 +1237,27 @@ function enviarAlerta() {
     return '<tr style="color:' + cor + '"><td>' + r[0] + '</td><td>' +
       (venc ? Utilities.formatDate(venc, Session.getScriptTimeZone(), 'dd/MM/yyyy') : '?') +
       (atrasado ? ' (VENCIDO)' : '') + '</td><td>' + (r[3] ? moeda(r[3]) : '?') +
+      (aumentos[String(r[9])] ? '<br><b style="color:#c0392b">↑ ' + aumentos[String(r[9])].pct + '% acima da média (' +
+        moeda(aumentos[String(r[9])].media) + ')</b>' : '') +
       '</td><td style="font-family:monospace;font-size:12px">' + (r[4] || '') +
       '</td><td><a href="' + r[7] + '">abrir</a></td></tr>';
   }).join('');
 
+  const htmlEsp = !esperadas.length ? '' :
+    '<p style="margin-top:18px"><b>Contas que costumam chegar e ainda não chegaram:</b></p><ul>' +
+    esperadas.map(e => '<li>' + e.fornecedor + ' — costuma vencer dia ' + e.dia + ' (~' + moeda(e.valor) + ')' +
+      (e.faltam < 0 ? ' <b style="color:#c0392b">já passou do dia</b>' : '') + '</li>').join('') +
+    '</ul><p style="font-size:13px;color:#666">Confira se o boleto chegou por outro caminho ou se precisa pedir a segunda via.</p>';
+  const assunto = linhas.length
+    ? '💰 ' + linhas.length + ' boleto(s) vencendo ou vencido(s)' + (esperadas.length ? ' + ' + esperadas.length + ' esperado(s)' : '')
+    : '💰 ' + esperadas.length + ' conta(s) esperada(s) ainda não chegaram';
   MailApp.sendEmail({
     to: Session.getEffectiveUser().getEmail(),
-    subject: '💰 ' + linhas.length + ' boleto(s) vencendo ou vencido(s)',
-    htmlBody: '<p>Contas a pagar nos próximos ' + CONFIG.DIAS_ALERTA + ' dias:</p>' +
+    subject: assunto,
+    htmlBody: (linhas.length ? '<p>Contas a pagar nos próximos ' + CONFIG.DIAS_ALERTA + ' dias:</p>' +
       '<table cellpadding="6" style="border-collapse:collapse" border="1">' +
       '<tr><th>Fornecedor</th><th>Vencimento</th><th>Valor</th><th>Linha digitável</th><th>E-mail</th></tr>' +
-      html + '</table><p><a href="' + (ScriptApp.getService().getUrl() || planilha().getUrl()) +
-      '">Abrir Meus Boletos</a> — marque como "Pago" depois de pagar.</p>'
+      html + '</table>' : '') + htmlEsp + '<p><a href="https://nobregadelivery.github.io/centraldosboletos/">Abrir a Central dos Boletos</a> — marque como "Pago" depois de pagar.</p>'
   });
 }
 
@@ -1282,7 +1315,12 @@ function buscarXmlsDaRodada() {
 function buscarXmlsComTrava(dias) {
   const lock = LockService.getDocumentLock() || LockService.getScriptLock();
   if (!lock.tryLock(150000)) return 0;
-  try { removerXmlsRepetidos(); try { relerXmlsSemDados(); } catch (e) { console.warn(e); } return buscarXmls(dias); } finally { lock.releaseLock(); }
+  try {
+    removerXmlsRepetidos();
+    try { relerXmlsSemDados(); } catch (e) { console.warn(e); }
+    try { parcelasDosXmlsAntigos(); } catch (e) { console.warn('Parcelas antigas: ' + e); }
+    return buscarXmls(dias);
+  } finally { lock.releaseLock(); }
 }
 
 function removerXmlsRepetidos() {
@@ -1326,6 +1364,7 @@ function buscarXmls(dias) {
 
   const q = 'has:attachment filename:xml newer_than:' + dias + 'd -in:chats';
   const novas = [];
+  const parcelasNovas = [];
   const conteudos = [];
   for (const th of GmailApp.search(q, 0, 100)) {
     if (Date.now() - inicio > 240000) break; // não passa do tempo limite do Google
@@ -1357,6 +1396,8 @@ function buscarXmls(dias) {
         conteudos.push([id, texto]);
         ids.add(id);
         if (d.chave) chaves.add(d.chave + '|' + d.tipo);
+        if (d.parcelas && d.parcelas.length) parcelasNovas.push({ d: d, remetente: emailDe, recebido: msg.getDate(),
+          link: 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(eu) + '#all/' + th.getId(), conta: contaDestino(msg) });
       });
     }
   }
@@ -1369,7 +1410,57 @@ function buscarXmls(dias) {
       arq.appendRow([id].concat(pedacos));
     });
   }
+  if (parcelasNovas.length) { try { criarContasDasParcelas(parcelasNovas); } catch (e) { console.warn('Parcelas: ' + e); } }
   return novas.length;
+}
+
+// ---------- Contas a pagar criadas pelas parcelas da NF-e ----------
+// Só parcelas que ainda vão vencer. Se já existe uma conta com o mesmo valor e vencimento
+// parecido (até 5 dias), entende que é o boleto dessa parcela e não duplica.
+const DIAS_JUNTAR = 5;
+function criarContasDasParcelas(itens) {
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  if (!contas) return 0;
+  const n = contas.getLastRow() - 1;
+  const vals = n > 0 ? contas.getRange(2, 1, n, CAB_CONTAS.length).getValues() : [];
+  const ids = new Set(vals.map(r => String(r[9])));
+  lerIdsArquivados().forEach(i => ids.add(i));
+  const nomePorEmail = {};
+  getFornecedores().forEach(f => { if (f.email) nomePorEmail[f.email.toLowerCase()] = f.nome; });
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const novas = [];
+  itens.forEach(it => {
+    const d = it.d, total = d.parcelas.length;
+    const nome = nomePorEmail[it.remetente] || nomeCurto(d.emitente) || it.remetente;
+    d.parcelas.forEach(p => {
+      if (p.venc < hoje) return;                               // parcela antiga: não cobra
+      const id = 'nfe-' + d.chave + '-' + p.n;
+      if (ids.has(id)) return;
+      const par = vals.find(r => mesmaConta(r[3], r[2], p.valor, p.venc));
+      if (par) {                                               // o boleto já está lá: só anota a nota
+        if (!par[11]) { const l = linhaDaConta(contas, par[9]); if (l > 0) contas.getRange(l, 12).setValue('NF-e nº ' + d.numero); }
+        return;
+      }
+      novas.push([nome, it.recebido, p.venc, p.valor, '', 'A pagar',
+                  'NF-e nº ' + d.numero + (total > 1 ? ' · parcela ' + p.n + ' de ' + total : ''),
+                  it.link, 'XML da NF-e', id, '', 'Pela nota fiscal; o boleto pode chegar depois', it.conta, '']);
+      ids.add(id);
+    });
+  });
+  if (novas.length) {
+    novas.forEach(r => contas.appendRow(r));
+    contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).sort({ column: 3, ascending: true });
+  }
+  return novas.length;
+}
+function mesmaConta(valorA, vencA, valorB, vencB) {
+  if (typeof valorA !== 'number' || typeof valorB !== 'number') return false;
+  if (Math.abs(valorA - valorB) > 0.009) return false;
+  if (!(vencA instanceof Date) || !(vencB instanceof Date)) return false;
+  return Math.abs(vencA.getTime() - vencB.getTime()) <= DIAS_JUNTAR * 864e5;
+}
+function nomeCurto(razao) {
+  return String(razao || '').replace(/\s+(S\.?\/?A\.?|LTDA\.?|ME|EPP|EIRELI)\b.*$/i, '').trim().slice(0, 40);
 }
 
 function salvarXmlNoDrive(blob, d, data) {
@@ -1419,6 +1510,10 @@ function lerXmlFiscal(texto) {
     r.emissao = data(txt('dhEmi', inf) || txt('dEmi', inf));
     const idAttr = inf.getAttribute('Id');
     r.chave = (idAttr ? idAttr.getValue() : '').replace(/\D/g, '') || txt('chNFe');
+    // Parcelas da cobrança (duplicatas): número, vencimento e valor de cada boleto da nota
+    r.parcelas = descendentes(inf).filter(e => e.getName() === 'dup').map((e, i) => ({
+      n: txt('nDup', e) || String(i + 1), venc: data(txt('dVenc', e)), valor: num(txt('vDup', e))
+    })).filter(p => p.venc && p.valor);
   } else if (tem('infCte')) {                            // CT-e
     const inf = achar('infCte');
     r.tipo = 'CT-e';
@@ -1510,4 +1605,128 @@ function getXml(id) {
     }
   }
   throw new Error('Não encontrei o conteúdo deste XML.');
+}
+
+// ===================== PADRÕES: HISTÓRICO, AUMENTOS E CONTAS ESPERADAS =====================
+// Os pagos saem da aba Contas depois de 30 dias; antes disso, fornecedor, vencimento e valor
+// ficam guardados na aba oculta "Histórico de valores", para comparar mês a mês.
+const ABA_HIST = 'Histórico de valores';
+const AUMENTO_MIN = 0.15;     // 15% acima da média
+const AUMENTO_MIN_REAIS = 5;  // e pelo menos R$ 5 a mais
+
+function abaHistorico() {
+  const ss = planilha();
+  let aba = ss.getSheetByName(ABA_HIST);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_HIST);
+    aba.getRange(1, 1, 1, 5).setValues([['ID', 'Fornecedor', 'Vencimento', 'Valor', 'Pago em']]).setFontWeight('bold');
+    aba.setFrozenRows(1);
+    try { aba.hideSheet(); } catch (e) {}
+  }
+  return aba;
+}
+
+function guardarNoHistorico(linhas) {
+  const boas = linhas.filter(r => typeof r[3] === 'number' && r[2] instanceof Date && String(r[8]).indexOf('DDA') < 0);
+  if (!boas.length) return;
+  const aba = abaHistorico();
+  const ja = new Set(aba.getLastRow() > 1 ? aba.getRange(2, 1, aba.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : []);
+  const novas = boas.filter(r => !ja.has(String(r[9]))).map(r => [String(r[9]), r[0], r[2], r[3], r[13] || '']);
+  if (novas.length) aba.getRange(aba.getLastRow() + 1, 1, novas.length, 5).setValues(novas);
+}
+
+function chaveForn(nome) {
+  return String(nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Junta histórico + contas atuais e marca em cada conta: aumento de valor e últimos valores.
+// Devolve a lista de contas que costumam chegar todo mês e ainda não chegaram.
+function analisarPadroes(contas, hojeTeste) {
+  const tz = Session.getScriptTimeZone();
+  const fmt = d => Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  const pontos = {};   // chave -> [{id, nome, d: 'yyyy-mm-dd', v}]
+  const add = (id, nome, d, v) => {
+    if (!d || typeof v !== 'number' || !(v > 0)) return;
+    const k = chaveForn(nome);
+    if (!k) return;
+    (pontos[k] = pontos[k] || []);
+    if (!pontos[k].some(p => p.id === id)) pontos[k].push({ id: id, nome: nome, d: d, v: v });
+  };
+  const aba = planilha().getSheetByName(ABA_HIST);
+  if (aba && aba.getLastRow() > 1)
+    aba.getRange(2, 1, aba.getLastRow() - 1, 4).getValues().forEach(r => {
+      if (r[2] instanceof Date) add(String(r[0]), String(r[1]), fmt(r[2]), r[3]);
+    });
+  contas.forEach(c => { if (c.origem.indexOf('DDA') < 0) add(c.id, c.fornecedor, c.vencimento, c.valor); });
+  Object.keys(pontos).forEach(k => pontos[k].sort((a, b) => a.d < b.d ? -1 : 1));
+
+  // Aumento de valor e últimos valores
+  contas.forEach(c => {
+    const lista = pontos[chaveForn(c.fornecedor)] || [];
+    const antes = lista.filter(p => p.id !== c.id && (!c.vencimento || p.d < c.vencimento));
+    c.historico = antes.slice(-6).reverse().map(p => ({ d: p.d, v: p.v }));
+    if (c.status !== 'Pago' && typeof c.valor === 'number' && antes.length >= 2) {
+      const ult = antes.slice(-3);
+      const media = ult.reduce((s, p) => s + p.v, 0) / ult.length;
+      if (c.valor > media * (1 + AUMENTO_MIN) && c.valor - media >= AUMENTO_MIN_REAIS)
+        c.aumento = { pct: Math.round((c.valor / media - 1) * 100), media: Math.round(media * 100) / 100 };
+    }
+  });
+
+  // Contas esperadas: apareceram em pelo menos 2 dos 3 últimos meses (incluindo o mês passado)
+  const hoje = hojeTeste ? new Date(hojeTeste) : new Date(); hoje.setHours(0, 0, 0, 0);
+  const mesAtual = fmt(hoje).slice(0, 7);
+  const mesesAtras = n => { const d = new Date(hoje.getFullYear(), hoje.getMonth() - n, 1); return fmt(d).slice(0, 7); };
+  const ultimos3 = [mesesAtras(1), mesesAtras(2), mesesAtras(3)];
+  const dispensadas = JSON.parse(PropertiesService.getScriptProperties().getProperty('ESPERADAS_DISPENSADAS') || '{}');
+  const esperadas = [];
+  Object.keys(pontos).forEach(k => {
+    const lista = pontos[k];
+    const meses = new Set(lista.map(p => p.d.slice(0, 7)));
+    if (!meses.has(ultimos3[0]) || ultimos3.filter(m => meses.has(m)).length < 2) return;
+    const recentes = lista.filter(p => ultimos3.indexOf(p.d.slice(0, 7)) >= 0);
+    const diasMes = recentes.map(p => +p.d.slice(8, 10)).sort((a, b) => a - b);
+    const dia = diasMes[Math.floor(diasMes.length / 2)];
+    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    const previsto = new Date(hoje.getFullYear(), hoje.getMonth(), Math.min(dia, ultimoDia));
+    const faltam = Math.round((previsto - hoje) / 864e5);
+    if (faltam > 5 || faltam < -10) return;                     // mostra de 5 dias antes até 10 dias depois
+    const chegou = lista.some(p => Math.abs(new Date(p.d + 'T00:00:00') - previsto) <= 12 * 864e5);
+    if (chegou || dispensadas[k + '|' + mesAtual]) return;
+    const valores = recentes.map(p => p.v).sort((a, b) => a - b);
+    esperadas.push({ chave: k, mes: mesAtual, fornecedor: lista[lista.length - 1].nome, dia: dia,
+                     previsto: fmt(previsto), faltam: faltam, valor: valores[Math.floor(valores.length / 2)] });
+  });
+  esperadas.sort((a, b) => a.faltam - b.faltam);
+  return esperadas;
+}
+
+function dispensarEsperada(chave, mes) {
+  const props = PropertiesService.getScriptProperties();
+  const d = JSON.parse(props.getProperty('ESPERADAS_DISPENSADAS') || '{}');
+  d[String(chave) + '|' + String(mes)] = Date.now();
+  Object.keys(d).forEach(k => { if (d[k] < Date.now() - 120 * 864e5) delete d[k]; });
+  props.setProperty('ESPERADAS_DISPENSADAS', JSON.stringify(d));
+}
+
+// Uma vez só: cria as contas das parcelas futuras das NF-e que já estavam registradas
+function parcelasDosXmlsAntigos() {
+  const props = PropertiesService.getScriptProperties();
+  if (CONFIG.PLANILHA_PRINCIPAL || props.getProperty('PARCELAS_ANTIGAS_OK')) return 0;
+  const aba = planilha().getSheetByName(ABA_XML), arq = planilha().getSheetByName(ABA_XML_ARQ);
+  if (!aba || !arq || aba.getLastRow() < 2 || arq.getLastRow() < 2) { props.setProperty('PARCELAS_ANTIGAS_OK', '1'); return 0; }
+  const regs = aba.getRange(2, 1, aba.getLastRow() - 1, CAB_XML.length).getValues();
+  const conteudo = {};
+  arq.getRange(2, 1, arq.getLastRow() - 1, Math.max(2, arq.getLastColumn())).getValues()
+     .forEach(r => { conteudo[String(r[0])] = r.slice(1).join(''); });
+  const itens = [];
+  regs.forEach(r => {
+    if (String(r[2]) !== 'NF-e' || !conteudo[String(r[0])]) return;
+    const d = lerXmlFiscal(conteudo[String(r[0])]);
+    if (d.parcelas && d.parcelas.length)
+      itens.push({ d: d, remetente: String(r[11]).toLowerCase(), recebido: r[1], link: String(r[13]), conta: String(r[14]) });
+  });
+  const n = itens.length ? criarContasDasParcelas(itens) : 0;
+  props.setProperty('PARCELAS_ANTIGAS_OK', '1');
+  return n;
 }

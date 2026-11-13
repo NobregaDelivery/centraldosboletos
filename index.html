@@ -174,6 +174,9 @@
   .guia a { color: var(--accent); }
   .refresh.ajuda { text-decoration: none; font-weight: 700; width: 36px; justify-content: center; padding: 8px 0; }
   .card.sug { --c: var(--accent); border-left-style: dashed; }
+  .card.esp { border-left-style: dashed; }
+  .who .alta { display: block; color: var(--late); font-weight: 600; font-size: 12.5px; margin-top: 2px; }
+  .hv { display: inline-block; margin: 0 10px 2px 0; white-space: nowrap; }
   .btn.ampliar { margin-top: 8px; flex: none; padding: 7px 12px; font-size: 13px; }
   .xml-topo { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   .xml-topo input { flex: 1 1 200px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
@@ -616,7 +619,8 @@
         <div class="who"><b>${esc(c.fornecedor)}</b><span>${ehAviso(c)
           ? 'Boleto novo no seu CNPJ · aviso de ' + esc(dataBR(c.recebido))
           : pago && c.pagoEm ? 'Venceu ' + esc(dataBR(c.vencimento)) + ' · sai do histórico em ' + Math.max(0, 30 + (dias(c.pagoEm) || 0)) + ' dia(s)'
-          : 'Vence ' + esc(dataBR(c.vencimento)) + (c.obs ? ' · ' + esc(c.obs) : '')}</span></div>
+          : 'Vence ' + esc(dataBR(c.vencimento)) + (c.obs ? ' · ' + esc(c.obs) : '')}</span>${c.aumento && !pago
+          ? `<span class="alta">↑ ${c.aumento.pct}% acima da média (${brl(c.aumento.media)})</span>` : ''}</div>
         <div class="amount"><b class="num">${brl(c.valor)}</b><span class="badge">${s.txt}</span></div>
       </button>
       <div class="actions">
@@ -638,6 +642,8 @@
           <dt>Chegou em</dt><dd>${esc(dataBR(c.recebido))}</dd>
           ${manual ? '' : `<dt>Assunto</dt><dd>${esc(c.assunto)}</dd>`}
           <dt>Dados de</dt><dd>${esc(c.origem)}</dd>
+          ${c.historico && c.historico.length ? `<dt>Valores anteriores</dt><dd>${c.historico.map(p =>
+            `<span class="hv">${esc(mesCurto(p.d))} ${brl(p.v)}</span>`).join('')}</dd>` : ''}
         </dl>
         <div class="edit">
           <label>Vencimento<input type="date" data-f="vencimento" value="${esc(c.vencimento)}"></label>
@@ -650,6 +656,26 @@
           <button data-act="addpix">${c.pix ? 'Trocar Pix' : 'Colar Pix'}</button>
           <button data-act="del" class="danger">Excluir</button>
         </div>
+      </div>
+    </article>`;
+  }
+
+  const MES3 = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  const mesCurto = d => d ? MES3[+d.slice(5, 7) - 1] + '/' + d.slice(2, 4) : '';
+  function espHTML(e) {
+    const quando = e.faltam > 0 ? 'costuma vencer dia ' + e.dia + ' (em ' + e.faltam + ' dia' + (e.faltam > 1 ? 's' : '') + ')'
+                 : e.faltam === 0 ? 'costuma vencer hoje (dia ' + e.dia + ')'
+                 : 'costumava vencer dia ' + e.dia + ' (há ' + (-e.faltam) + ' dia' + (e.faltam < -1 ? 's' : '') + ')';
+    return `
+    <article class="card esp ${e.faltam < 0 ? 'late' : 'soon'}" data-esp="${esc(e.chave)}">
+      <div class="main-row" style="cursor:default">
+        <div class="who"><b>${esc(e.fornecedor)}</b><span>${esc(quando)}</span></div>
+        <div class="amount"><b class="num">~${brl(e.valor)}</b><span class="badge">Não chegou</span></div>
+      </div>
+      <p class="sug-info">Essa conta chegou nos últimos meses, mas a deste mês ainda não apareceu. Confira se veio por outro caminho ou peça a segunda via.</p>
+      <div class="actions">
+        <button class="btn" data-eact="dispensar">Não vem este mês</button>
+        <button class="btn primary" data-eact="lancar">Lançar manualmente</button>
       </div>
     </article>`;
   }
@@ -681,14 +707,17 @@
 
     const blocoSug = filtro === 'pagos' || !sugestoes.length ? '' :
       `<h2><span>Sugestões de boleto para cadastro</span><span>${sugestoes.length}</span></h2>` + sugestoes.map(sugHTML).join('');
+    const blocoEsp = filtro === 'pagos' || !esperadas.length ? '' :
+      `<h2><span>Esperadas que ainda não chegaram</span><span>${esperadas.length}</span></h2>` + esperadas.map(espHTML).join('');
     if (!lista.length) {
-      $('list').innerHTML = `<div class="empty">${filtro === 'pagos' ? 'Nenhum pagamento nos últimos 30 dias.' : 'Tudo em dia. Nenhuma conta a pagar.'}</div>` + blocoSug;
+      $('list').innerHTML = blocoEsp + `<div class="empty">${filtro === 'pagos' ? 'Nenhum pagamento nos últimos 30 dias.' : 'Tudo em dia. Nenhuma conta a pagar.'}</div>` + blocoSug;
       return;
     }
     const aberto = c => c.status !== 'Pago', n = c => dias(c.vencimento);
     const grupos = filtro === 'pagos' ? [['__HIST__', []], ['Pagos nos últimos 30 dias', lista]] : [
       ['Vencidos', lista.filter(c => aberto(c) && n(c) !== null && n(c) < 0)],
       ['Próximos 7 dias', lista.filter(c => aberto(c) && n(c) !== null && n(c) >= 0 && n(c) <= 7)],
+      ['__ESP__', []],
       ['Avisos do DDA (confira no banco)', lista.filter(c => aberto(c) && ehAviso(c))],
       ['__SUG__', []],
       ['Mais adiante', lista.filter(c => aberto(c) && n(c) !== null && n(c) > 7)],
@@ -696,13 +725,13 @@
       ['Pagos', lista.filter(c => !aberto(c))]
     ];
     const notaHist = '<p class="hist-nota">Cada pagamento fica aqui por 30 dias a partir do dia em que foi marcado como pago, e depois é apagado. Se marcou por engano, use <b>Desfazer pago</b>.</p>';
-    $('list').innerHTML = grupos.filter(g => g[0] === '__SUG__' || g[0] === '__HIST__' || g[1].length).map(([t, arr]) => t === '__SUG__' ? blocoSug : t === '__HIST__' ? notaHist :
+    $('list').innerHTML = grupos.filter(g => /^__/.test(g[0]) || g[1].length).map(([t, arr]) => t === '__SUG__' ? blocoSug : t === '__HIST__' ? notaHist : t === '__ESP__' ? blocoEsp :
       `<h2><span>${t}</span><span class="num">${brl(arr.reduce((s, c) => s + (c.valor || 0), 0))}</span></h2>` + arr.map(cardHTML).join('')
     ).join('');
     document.querySelectorAll('.card.open .qr[data-pix]').forEach(el => desenharQr(el, el.dataset.pix));
   }
 
-  let fornecedores = [], caixas = [], sugestoes = [];
+  let fornecedores = [], caixas = [], sugestoes = [], esperadas = [];
   async function atualizar(fn, args, _sem_uso, espera) {
     try {
       const r = await Promise.race([
@@ -710,7 +739,8 @@
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), espera || 45000))
       ]);
       if (Array.isArray(r)) contas = r;
-      else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; sugestoes = r.sugestoes || sugestoes; renderForn(); if (r.msg) toast(r.msg); }
+      else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; sugestoes = r.sugestoes || sugestoes;
+             esperadas = r.esperadas || esperadas; renderForn(); if (r.msg) toast(r.msg); }
       render(); return true;
     } catch (e) {
       toast('Erro: ' + (e && e.message ? e.message : e)); return false;
@@ -766,7 +796,7 @@
         if (!arquivos || !arquivos.length) continue;
         const pix = await lerQrDePdfs(arquivos);
         if (!pix) continue;
-        contas = await chamar('atualizarConta', c.id, { pix });
+        const r = await chamar('atualizarConta', c.id, { pix }); contas = Array.isArray(r) ? r : r.contas;
         render(); toast('Pix encontrado: ' + c.fornecedor);
       } catch (e) { /* PDF de outra conta, sem QR ou sem conexão: segue para o próximo */ }
     }
@@ -877,6 +907,15 @@
       } catch (e) { toast(e.message); }
       xb.disabled = false; xb.innerHTML = txt;
       return;
+    }
+    const eb = ev.target.closest('[data-eact]');
+    if (eb) {
+      const e = esperadas.find(x => x.chave === eb.closest('.card').dataset.esp);
+      if (!e) return;
+      if (eb.dataset.eact === 'dispensar') { eb.disabled = true; await atualizar('dispensarEsperada', [e.chave, e.mes]); toast(e.fornecedor + ': não vou lembrar mais este mês'); return; }
+      $('formAdd').reset(); $('hLinha').textContent = ''; $('hPix').textContent = '';
+      $('fForn').value = e.fornecedor; $('fVenc').value = e.previsto; $('fVal').value = e.valor;
+      dlg.showModal(); return;
     }
     const sb = ev.target.closest('[data-sact]');
     if (sb) {
@@ -1040,7 +1079,8 @@
 
   // ---------- Entrar / sair ----------
   function aplicarEstado(r) {
-    contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || []; render(); renderForn();
+    contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || [];
+    esperadas = r.esperadas || []; render(); renderForn();
     setTimeout(autoPix, 1500);
     const s = lerSessao(); $('quemSou').textContent = s ? 'Conectado como ' + s.email : '';
   }
@@ -1126,7 +1166,7 @@
     if (!confirm('Sair da sua conta neste aparelho?')) return;
     try { await chamar('sair'); } catch (e) {}
     gravarSessao(null); try { dlgF.close(); } catch (e) {}
-    contas = []; sugestoes = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
+    contas = []; sugestoes = []; esperadas = []; xmls = null; xmlBusca = ""; fornecedores = []; caixas = []; render(); pedirSenha();
   }
   $('btnSair').addEventListener('click', sairDaConta);
   $('btnSairTopo').addEventListener('click', sairDaConta);
