@@ -198,7 +198,7 @@ function getContas() {
   const emailDe = {};
   getFornecedores().forEach(f => { if (!emailDe[f.nome]) emailDe[f.nome] = f.email; });
   return contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues()
-    .filter(r => r[9])
+    .filter(r => r[9] && (r[0] || r[1] instanceof Date || r[3] !== '' || r[8]))
     .map(r => ({
       fornecedor: String(r[0]), recebido: fmt(r[1]), vencimento: fmt(r[2]),
       valor: typeof r[3] === 'number' ? r[3] : null, linha: String(r[4] || ''),
@@ -874,6 +874,7 @@ function arquivarIds(ids) {
   aba.getRange(aba.getLastRow() + 1, 1, reais.length, 2).setValues(reais.map(i => [i, new Date()]));
 }
 
+const DIAS_AVISO_DDA = 10;   // avisos do DDA saem da lista depois de 10 dias
 function limparHistorico() {
   if (CONFIG.PLANILHA_PRINCIPAL) return; // só a conta principal faz a limpeza
   const contas = planilha().getSheetByName(ABA_CONTAS);
@@ -882,14 +883,20 @@ function limparHistorico() {
   const vals = contas.getRange(2, 1, n, CAB_CONTAS.length).getValues();
   const limite = Date.now() - DIAS_HISTORICO * 864e5;
   const apagar = [];
+  const avisoVelho = Date.now() - DIAS_AVISO_DDA * 864e5;
   vals.forEach((r, i) => {
-    if (r[5] !== 'Pago') return;
+    if (!r[0] && !(r[1] instanceof Date) && r[3] === '' && !r[8]) { apagar.push(i + 2); return; }  // linha vazia ou sobra
+    if (r[5] !== 'Pago') {
+      // aviso do DDA é só um lembrete para conferir no banco: some depois de alguns dias
+      if (String(r[8]).indexOf('DDA') >= 0 && r[1] instanceof Date && r[1].getTime() < avisoVelho) apagar.push(i + 2);
+      return;
+    }
     if (!(r[13] instanceof Date)) { contas.getRange(i + 2, 14).setValue(new Date()); return; } // pagos antigos: conta a partir de hoje
     if (r[13].getTime() < limite) apagar.push(i + 2);
   });
   if (!apagar.length) return 0;
-  guardarNoHistorico(apagar.map(l => vals[l - 2]));
-  arquivarIds(apagar.map(l => String(vals[l - 2][9])));
+  guardarNoHistorico(apagar.map(l => vals[l - 2]).filter(r => r[5] === 'Pago'));
+  arquivarIds(apagar.map(l => String(vals[l - 2][9])).filter(Boolean));
   apagar.reverse().forEach(l => contas.deleteRow(l));
   // IDs arquivados há mais de 120 dias já estão fora da janela de busca: pode limpar
   const arq = planilha().getSheetByName(ABA_ARQ);
@@ -1230,9 +1237,15 @@ function enviarAlerta() {
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
   const limite = new Date(hoje.getTime() + CONFIG.DIAS_ALERTA * 24 * 3600 * 1000);
 
-  let linhas = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues()
-    .filter(r => r[5] !== 'Pago')
-    .filter(r => !(r[2] instanceof Date) || r[2] <= limite);
+  const todas = contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues()
+    .filter(r => r[5] !== 'Pago' && (r[0] || r[9]));
+  const ehDDA = r => String(r[8]).indexOf('DDA') >= 0;
+  const recente = r => r[1] instanceof Date && r[1].getTime() >= Date.now() - 864e5;   // chegou nas últimas 24h
+  // Só entram na conta as que têm vencimento até o limite (vencendo ou vencidas). Avisos do DDA e
+  // e-mails sem vencimento não têm o que pagar no app: aparecem só no dia em que chegam.
+  let linhas = todas.filter(r => !ehDDA(r) && r[2] instanceof Date && r[2] <= limite);
+  const novosDDA = todas.filter(r => ehDDA(r) && recente(r));
+  const novosSemData = todas.filter(r => !ehDDA(r) && !(r[2] instanceof Date) && recente(r));
   const cfgEmp = lerConfigEmpresas();
   const automaticas = linhas.filter(r => (cfgEmp[chaveForn(r[0])] || {}).auto);
   linhas = linhas.filter(r => !(cfgEmp[chaveForn(r[0])] || {}).auto);
@@ -1242,7 +1255,11 @@ function enviarAlerta() {
     esperadas = analisarPadroes(lista).filter(e => e.faltam <= 3);
     lista.forEach(x => { if (x.aumento) aumentos[x.id] = x.aumento; });
   } catch (e) { console.warn('Padrões no alerta: ' + e); }
-  if (!linhas.length && !esperadas.length) return;
+  if (!linhas.length && !esperadas.length && !novosDDA.length && !novosSemData.length) return;
+  const htmlNovos = (novosDDA.length ? '<p style="margin-top:18px"><b>Novos boletos no seu CPF/CNPJ (DDA)</b> — confira no app do banco: ' +
+      novosDDA.map(r => r[0]).join(', ') + '.</p>' : '') +
+    (novosSemData.length ? '<p><b>Chegaram e-mails sem vencimento identificado</b> — abra no app para conferir: ' +
+      novosSemData.map(r => r[0]).join(', ') + '.</p>' : '');
   const htmlAuto = !automaticas.length ? '' : '<p style="font-size:13px;color:#666">Saem no pagamento automático (só confira no banco): ' +
     automaticas.map(r => r[0] + (r[3] ? ' ' + moeda(r[3]) : '')).join(', ') + '.</p>';
 
@@ -1264,16 +1281,20 @@ function enviarAlerta() {
     esperadas.map(e => '<li>' + e.fornecedor + ' — costuma vencer dia ' + e.dia + ' (~' + moeda(e.valor) + ')' +
       (e.faltam < 0 ? ' <b style="color:#c0392b">já passou do dia</b>' : '') + '</li>').join('') +
     '</ul><p style="font-size:13px;color:#666">Confira se o boleto chegou por outro caminho ou se precisa pedir a segunda via.</p>';
+  const vencidas = linhas.filter(r => r[2] < hoje).length;
   const assunto = linhas.length
-    ? '💰 ' + linhas.length + ' boleto(s) vencendo ou vencido(s)' + (esperadas.length ? ' + ' + esperadas.length + ' esperado(s)' : '')
-    : '💰 ' + esperadas.length + ' conta(s) esperada(s) ainda não chegaram';
+    ? '💰 ' + linhas.length + ' boleto(s) a pagar nos próximos ' + CONFIG.DIAS_ALERTA + ' dias' + (vencidas ? ' (' + vencidas + ' vencido(s))' : '') +
+      (esperadas.length ? ' + ' + esperadas.length + ' esperado(s)' : '')
+    : esperadas.length ? '💰 ' + esperadas.length + ' conta(s) esperada(s) ainda não chegaram'
+    : '💰 Novos avisos de boleto para conferir';
   MailApp.sendEmail({
     to: Session.getEffectiveUser().getEmail(),
     subject: assunto,
     htmlBody: (linhas.length ? '<p>Contas a pagar nos próximos ' + CONFIG.DIAS_ALERTA + ' dias:</p>' +
       '<table cellpadding="6" style="border-collapse:collapse" border="1">' +
       '<tr><th>Fornecedor</th><th>Vencimento</th><th>Valor</th><th>Linha digitável</th><th>E-mail</th></tr>' +
-      html + '</table>' : '') + htmlEsp + htmlAuto + '<p><a href="https://nobregadelivery.github.io/centraldosboletos/">Abrir a Central dos Boletos</a> — marque como "Pago" depois de pagar.</p>'
+      html + '</table>' : '<p>Nenhuma conta vencendo nos próximos ' + CONFIG.DIAS_ALERTA + ' dias.</p>') +
+      htmlEsp + htmlNovos + htmlAuto + '<p><a href="https://nobregadelivery.github.io/centraldosboletos/">Abrir a Central dos Boletos</a> — marque como "Pago" depois de pagar.</p>'
   });
 }
 

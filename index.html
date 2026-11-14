@@ -656,7 +656,7 @@
   }
 
   function resumo() {
-    const abertas = contas.filter(c => c.status !== 'Pago' && naCategoria(c.fornecedor));
+    const abertas = contas.filter(c => c.status !== 'Pago' && !ehAviso(c) && naCategoria(c.fornecedor));
     const soma = arr => arr.reduce((s, c) => s + (c.valor || 0), 0);
     const late = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n < 0 && !ehAuto(c); });
     const soon = abertas.filter(c => { const n = dias(c.vencimento); return n !== null && n >= 0 && n <= 7; });
