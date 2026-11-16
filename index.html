@@ -163,6 +163,12 @@
   .conectar .box { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); padding: 24px; width: min(420px, 100%); }
   .conectar h2 { all: unset; display: block; font-size: 20px; font-weight: 700; margin-bottom: 6px; color: var(--ink); }
   .conectar p { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+  .senha-wrap { position: relative; display: block; margin-bottom: 10px; }
+  .senha-wrap input { padding-right: 46px !important; margin-bottom: 0 !important; }
+  .olho { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 40px; height: 40px;
+    border: 0; background: none; color: var(--muted); cursor: pointer; display: grid; place-items: center; border-radius: 8px; }
+  .olho:hover { color: var(--ink); }
+  .olho svg { width: 20px; height: 20px; }
   .conectar input { font: inherit; width: 100%; padding: 12px; border-radius: 10px;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 10px; }
   .conectar .btn { width: 100%; padding: 12px; }
@@ -651,6 +657,7 @@
   function pedirSenha(msg) {
     $('cErro').textContent = msg || '';
     $('formConectar').hidden = false; $('formTrocar').hidden = true; $('formEsqueci').hidden = true;
+    try { esconderSenhas(); } catch (e) {}
     $('conectar').classList.add('show');
     setTimeout(() => ($('cEmail').value ? $('cSenha') : $('cEmail')).focus(), 50);
   }
@@ -1322,12 +1329,39 @@
     } catch (e) { $('cErro').textContent = e.message; }
     b.disabled = false; b.textContent = 'Entrar';
   });
+  // ---------- Olho para mostrar/esconder a senha ----------
+  const OLHO_ABERTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const OLHO_FECHADO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.9 17.9A10.4 10.4 0 0 1 12 19c-6.4 0-10-7-10-7a18.4 18.4 0 0 1 4.1-5.1"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 5c6.4 0 10 7 10 7a18.6 18.6 0 0 1-2.2 3.2"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M2 2l20 20"/></svg>';
+  document.querySelectorAll('input[type="password"]').forEach(inp => {
+    const w = document.createElement('span'); w.className = 'senha-wrap';
+    inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'olho'; b.innerHTML = OLHO_ABERTO;
+    b.setAttribute('aria-label', 'Mostrar senha'); b.setAttribute('aria-pressed', 'false');
+    b.addEventListener('click', () => {
+      const mostrar = inp.type === 'password';
+      inp.type = mostrar ? 'text' : 'password';
+      b.innerHTML = mostrar ? OLHO_FECHADO : OLHO_ABERTO;
+      b.setAttribute('aria-label', mostrar ? 'Esconder senha' : 'Mostrar senha');
+      b.setAttribute('aria-pressed', String(mostrar));
+      inp.focus(); try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) {}
+    });
+    w.appendChild(b);
+  });
+  // ao voltar para a tela de login, a senha volta a ficar escondida
+  function esconderSenhas() {
+    document.querySelectorAll('.senha-wrap input').forEach(i => {
+      i.type = 'password'; const b = i.parentNode.querySelector('.olho');
+      b.innerHTML = OLHO_ABERTO; b.setAttribute('aria-label', 'Mostrar senha'); b.setAttribute('aria-pressed', 'false'); });
+  }
+
   // ---------- Esqueci / trocar senha ----------
   function mostrarTela(qual) {
     $('formConectar').hidden = qual !== 'entrar';
     $('formTrocar').hidden = qual !== 'trocar';
     $('formEsqueci').hidden = qual !== 'esqueci';
     ['cErro', 'tErro', 'eErro'].forEach(i => $(i).textContent = '');
+    esconderSenhas();
     const email = $('cEmail').value.trim();
     if (qual === 'trocar') { $('tEmail').value = email; ($('tEmail').value ? $('tAtual') : $('tEmail')).focus(); }
     if (qual === 'esqueci') { $('eEmail').value = email; $('eP1').hidden = false; $('eP2').hidden = true;
