@@ -468,6 +468,7 @@ const FUNCOES_API = {
   adicionarComprovante:(r) => { adicionarRemetenteComprovante(r); return getRemetentesComprovante(); },
   removerComprovante:  (email) => { removerRemetenteComprovante(email); return getRemetentesComprovante(); },
   listarIntegracoes:   () => listarIntegracoes(),
+  renomearEmpresa:     (antigo, novo) => { renomearEmpresa(antigo, novo); return estado(''); },
   criarChaveIntegracao:(nome) => criarChaveIntegracao(nome),
   revogarChaveIntegracao: (id) => { revogarChaveIntegracao(id); return listarIntegracoes(); },
   buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
@@ -615,7 +616,7 @@ function integracaoAchar(req, soAbertas) {
   const pago = dataIso(req.data);
   if (!nome && valor === null) throw erro('dados', 'Informe "id", ou "fornecedor" e "valor".');
   const nomes = nomesEquivalentes(nome);          // razão social -> nome cadastrado (ex.: NOTARO ALIMENTOS -> Natto)
-  const bateNome = k => nomes.some(n => k === n || (n.length >= 4 && k.indexOf(n) >= 0) || (k.length >= 4 && n.indexOf(k) >= 0));
+  const bateNome = k => nomes.some(n => mesmoNome(k, n));
   const bateValor = x => valor === null || (typeof x.r[3] === 'number' && Math.abs(x.r[3] - valor) < 0.01);
   const perto = x => {
     if (!(x.r[2] instanceof Date)) return true;
@@ -633,6 +634,22 @@ function integracaoAchar(req, soAbertas) {
   return { contas: contas, achadas: achadas };
 }
 
+// Dois nomes são da mesma empresa se as palavras importantes de um estão todas no outro
+// (ignora LTDA, S.A., ME, EPP, EIRELI etc.). Ex.: "NOTARO ALIMENTOS LTDA" = "Natto (Notaro Alimentos)".
+const PALAVRAS_IGNORAR = ['ltda', 'sa', 's', 'a', 'me', 'epp', 'eireli', 'cia', 'de', 'da', 'do', 'das', 'dos', 'e', 'em', 'the'];
+function palavrasNome(k) { return String(k || '').split(' ').filter(p => p && PALAVRAS_IGNORAR.indexOf(p) < 0); }
+function mesmoNome(a, b) {
+  a = chaveForn(a); b = chaveForn(b);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const pa = palavrasNome(a), pb = palavrasNome(b);
+  if (!pa.length || !pb.length) return false;
+  if (pa.join(' ') === pb.join(' ')) return true;             // mesmas palavras (ex.: "BRF SA" = "BRF S.A.")
+  const [menor, maior] = pa.length <= pb.length ? [pa, pb] : [pb, pa];
+  if (!menor.some(p => p.length >= 4)) return false;           // evita casar só por palavras curtas
+  return menor.every(p => maior.indexOf(p) >= 0);
+}
+
 // Nomes que significam a mesma empresa: o próprio, e o nome cadastrado de quem emitiu NF-e com essa razão social
 function nomesEquivalentes(nome) {
   const lista = [nome];
@@ -643,7 +660,7 @@ function nomesEquivalentes(nome) {
       const acharNome = nomeDoFornecedor();
       aba.getRange(2, 1, aba.getLastRow() - 1, 12).getValues().forEach(r => {
         const razao = chaveForn(r[4]);
-        if (!razao || !(razao === nome || razao.indexOf(nome) >= 0 || nome.indexOf(razao) >= 0)) return;
+        if (!razao || !mesmoNome(razao, nome)) return;
         const cad = chaveForn(acharNome(String(r[11])));
         if (cad && lista.indexOf(cad) < 0) lista.push(cad);
       });
@@ -2244,4 +2261,27 @@ function acharContaDoComprovante(vals, comp, dataPag) {
 // Linha digitável de 47 dígitos -> código de barras de 44
 function linhaParaBarras(l) {
   return l.length !== 47 ? '' : l.slice(0, 4) + l.slice(32, 47) + l.slice(4, 9) + l.slice(10, 20) + l.slice(21, 31);
+}
+
+// Renomeia a empresa em todos os lugares: cadastro, contas, histórico de valores, contas fixas e configurações
+function renomearEmpresa(antigo, novo) {
+  antigo = String(antigo || '').trim(); novo = String(novo || '').trim().slice(0, 60);
+  if (!antigo || !novo) throw new Error('Informe o nome atual e o novo.');
+  if (antigo === novo) return 0;
+  const ss = planilha();
+  let n = 0;
+  const trocar = (nomeAba, col) => {
+    const aba = ss.getSheetByName(nomeAba);
+    if (!aba || aba.getLastRow() < 2) return;
+    const rg = aba.getRange(2, col, aba.getLastRow() - 1, 1);
+    const v = rg.getValues();
+    let mudou = false;
+    v.forEach(r => { if (String(r[0]).trim() === antigo) { r[0] = novo; mudou = true; n++; } });
+    if (mudou) rg.setValues(v);
+  };
+  trocar(ABA_FORN, 1); trocar(ABA_CONTAS, 1); trocar(ABA_HIST, 2); trocar(ABA_FIXAS, 2);
+  const cfg = lerConfigEmpresas(), ka = chaveForn(antigo), kn = chaveForn(novo);
+  if (cfg[ka]) { cfg[kn] = Object.assign({}, cfg[ka], { nome: novo }); delete cfg[ka];
+    PropertiesService.getScriptProperties().setProperty('CONFIG_EMPRESAS', JSON.stringify(cfg)); }
+  return n;
 }
