@@ -467,16 +467,23 @@ const FUNCOES_API = {
   getComprovantes:     () => getRemetentesComprovante(),
   adicionarComprovante:(r) => { adicionarRemetenteComprovante(r); return getRemetentesComprovante(); },
   removerComprovante:  (email) => { removerRemetenteComprovante(email); return getRemetentesComprovante(); },
+  listarIntegracoes:   () => listarIntegracoes(),
+  criarChaveIntegracao:(nome) => criarChaveIntegracao(nome),
+  revogarChaveIntegracao: (id) => { revogarChaveIntegracao(id); return listarIntegracoes(); },
   buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
 };
 const DIAS_SESSAO = 180;
 const MAX_TENTATIVAS = 5;
 
 function doPost(e) {
-  let resposta;
+  let resposta, req = {};
   try {
-    const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    if (req.acao === 'login') {
+    const bruto = (e && e.postData && e.postData.contents) || '{}';
+    try { req = JSON.parse(bruto); }
+    catch (x) { registrarIntegracao('?', 'pedido inválido', '', 'erro: o corpo não é JSON (' + String(bruto).slice(0, 60) + ')'); throw x; }
+    if (req.acao === 'integracao') {
+      resposta = { ok: true, dados: atenderIntegracao(req) };
+    } else if (req.acao === 'login') {
       resposta = { ok: true, dados: fazerLogin(req.email, req.senha, req.aparelho) };
     } else if (req.acao === 'trocarSenha') {
       resposta = { ok: true, dados: trocarSenha(req.email, req.senha, req.novaSenha, req.aparelho) };
@@ -487,6 +494,9 @@ function doPost(e) {
     } else {
       const sessao = validarSessao(req.token);
       if (!sessao) {
+        // pedido sem sessão válida: registra (sem dados sensíveis) para ajudar a descobrir integrações mal configuradas
+        registrarIntegracao(req.programa || '?', String(req.acao || req.fn || '(sem ação)'), Object.keys(req).join(','),
+          'recusado: ' + (req.token ? 'sessão inválida ou expirada' : 'sem token e sem chave de integração'));
         resposta = { ok: false, erro: 'sessao', mensagem: 'Sua sessão expirou. Entre novamente.' };
       } else if (req.fn === 'sair') {
         encerrarSessao(req.token);
@@ -501,6 +511,158 @@ function doPost(e) {
     resposta = { ok: false, erro: err.codigo || 'falha', mensagem: err.message };
   }
   return ContentService.createTextOutput(JSON.stringify(resposta)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ===================== INTEGRAÇÃO COM OUTROS PROGRAMAS (ex.: RH Firme) =====================
+// O outro programa usa uma CHAVE própria (criada no app, em Empresas → Integrações), não a senha do app.
+// Pedido (POST, corpo JSON, Content-Type text/plain):
+//   { "acao":"integracao", "chave":"...", "programa":"RH Firme", "op":"marcarPago",
+//     "fornecedor":"Nome", "valor":1500.00, "vencimento":"2026-11-30", "data":"2026-11-19", "id":"(opcional)",
+//     "criarSeNaoExistir": true }
+// Operações: "teste", "listar", "marcarPago", "desmarcarPago".
+const ABA_INTEG = 'Integrações';
+function lerChavesIntegracao() {
+  return JSON.parse(PropertiesService.getScriptProperties().getProperty('INTEGRACAO_CHAVES') || '[]');
+}
+function gravarChavesIntegracao(l) { PropertiesService.getScriptProperties().setProperty('INTEGRACAO_CHAVES', JSON.stringify(l)); }
+function criarChaveIntegracao(nome) {
+  nome = String(nome || '').trim().slice(0, 40) || 'Outro programa';
+  const chave = 'cb_' + gerarAleatorio(32);
+  const l = lerChavesIntegracao();
+  l.push({ id: gerarAleatorio(8), nome: nome, hash: sha256(chave), criada: Date.now(), uso: 0 });
+  gravarChavesIntegracao(l);
+  return { nome: nome, chave: chave };   // a chave só é mostrada agora; depois fica só o "hash"
+}
+function revogarChaveIntegracao(id) { gravarChavesIntegracao(lerChavesIntegracao().filter(k => k.id !== id)); }
+function listarIntegracoes() {
+  const tz = Session.getScriptTimeZone();
+  const chaves = lerChavesIntegracao().map(k => ({ id: k.id, nome: k.nome,
+    criada: Utilities.formatDate(new Date(k.criada), tz, 'dd/MM/yyyy'),
+    uso: k.uso ? Utilities.formatDate(new Date(k.uso), tz, 'dd/MM HH:mm') : '' }));
+  const aba = planilha().getSheetByName(ABA_INTEG);
+  let log = [];
+  if (aba && aba.getLastRow() > 1) {
+    const n = Math.min(15, aba.getLastRow() - 1);
+    log = aba.getRange(aba.getLastRow() - n + 1, 1, n, 5).getValues().reverse().map(r => ({
+      quando: r[0] instanceof Date ? Utilities.formatDate(r[0], tz, 'dd/MM HH:mm') : '', programa: String(r[1]),
+      op: String(r[2]), dados: String(r[3]), resultado: String(r[4]) }));
+  }
+  return { chaves: chaves, log: log, url: ScriptApp.getService().getUrl() };
+}
+function registrarIntegracao(programa, op, dados, resultado) {
+  try {
+    const ss = planilha();
+    let aba = ss.getSheetByName(ABA_INTEG);
+    if (!aba) {
+      aba = ss.insertSheet(ABA_INTEG);
+      aba.getRange(1, 1, 1, 5).setValues([['Quando', 'Programa', 'Operação', 'Dados', 'Resultado']]).setFontWeight('bold');
+      aba.setFrozenRows(1);
+    }
+    aba.appendRow([new Date(), String(programa).slice(0, 40), String(op).slice(0, 40), String(dados).slice(0, 200), String(resultado).slice(0, 300)]);
+    if (aba.getLastRow() > 501) aba.deleteRows(2, aba.getLastRow() - 501);   // guarda as últimas 500
+  } catch (e) { console.warn('Log de integração: ' + e); }
+}
+
+function atenderIntegracao(req) {
+  const programa = String(req.programa || '?').slice(0, 40);
+  const op = String(req.op || '');
+  const resumo = ['id', 'fornecedor', 'valor', 'vencimento', 'data'].filter(k => req[k] != null && req[k] !== '')
+    .map(k => k + '=' + String(req[k]).slice(0, 40)).join(' ');
+  const chaves = lerChavesIntegracao();
+  const k = req.chave ? chaves.find(x => iguais(x.hash, sha256(String(req.chave)))) : null;
+  if (!k) {
+    registrarIntegracao(programa, op, resumo, 'recusado: chave de integração ' + (req.chave ? 'inválida' : 'ausente'));
+    Utilities.sleep(800);
+    throw erro('chave', 'Chave de integração inválida. Crie uma no app: Empresas → Integrações.');
+  }
+  k.uso = Date.now(); gravarChavesIntegracao(chaves);
+  const nome = programa !== '?' ? programa : k.nome;
+  try {
+    let r;
+    if (op === 'teste') r = { conectado: true, programa: k.nome, mensagem: 'Conexão com a Central dos Boletos funcionando.' };
+    else if (op === 'listar') r = getContas().filter(c => c.status !== 'Pago' && c.origem.indexOf('DDA') < 0)
+      .map(c => ({ id: c.id, fornecedor: c.fornecedor, vencimento: c.vencimento, valor: c.valor, status: c.status }));
+    else if (op === 'marcarPago') r = integracaoMarcarPago(req, nome);
+    else if (op === 'desmarcarPago') r = integracaoDesmarcar(req, nome);
+    else throw erro('op', 'Operação desconhecida: "' + op + '". Use teste, listar, marcarPago ou desmarcarPago.');
+    registrarIntegracao(nome, op, resumo, 'ok' + (r && r.mensagem ? ': ' + r.mensagem : ''));
+    return r;
+  } catch (e) {
+    registrarIntegracao(nome, op, resumo, 'erro: ' + e.message);
+    throw e;
+  }
+}
+
+function dataIso(s) {
+  if (s instanceof Date) return s;
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/) || String(s || '').match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return null;
+  return m[1].length === 4 ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(+m[3], +m[2] - 1, +m[1]);
+}
+
+// Acha a conta: pelo id; ou pelo nome (parecido) + valor exato (+ vencimento até 10 dias de diferença, se informado)
+function integracaoAchar(req, soAbertas) {
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  const vals = contas.getLastRow() > 1 ? contas.getRange(2, 1, contas.getLastRow() - 1, CAB_CONTAS.length).getValues() : [];
+  const linhas = vals.map((r, i) => ({ r: r, l: i + 2 })).filter(x => x.r[9] && (!soAbertas || x.r[5] !== 'Pago') === true);
+  if (req.id) {
+    const x = linhas.find(y => String(y.r[9]) === String(req.id));
+    return { contas: contas, achadas: x ? [x] : [] };
+  }
+  const nome = chaveForn(req.fornecedor);
+  const valor = req.valor != null && req.valor !== '' ? Number(String(req.valor).replace(',', '.')) : null;
+  const venc = dataIso(req.vencimento);
+  if (!nome && valor === null) throw erro('dados', 'Informe "id", ou "fornecedor" e "valor".');
+  const achadas = linhas.filter(x => {
+    if (String(x.r[8]).indexOf('DDA') >= 0) return false;
+    const k = chaveForn(x.r[0]);
+    if (nome && !(k === nome || k.indexOf(nome) >= 0 || nome.indexOf(k) >= 0)) return false;
+    if (valor !== null && !(typeof x.r[3] === 'number' && Math.abs(x.r[3] - valor) < 0.01)) return false;
+    if (venc && x.r[2] instanceof Date && Math.abs(x.r[2] - venc) > 10 * 864e5) return false;
+    return true;
+  });
+  return { contas: contas, achadas: achadas };
+}
+
+function integracaoMarcarPago(req, programa) {
+  const { contas, achadas } = integracaoAchar(req, true);
+  const quando = dataIso(req.data) || new Date();
+  const nota = 'pago pelo ' + programa + ' em ' + Utilities.formatDate(quando, Session.getScriptTimeZone(), 'dd/MM');
+  if (achadas.length === 1) {
+    const x = achadas[0];
+    contas.getRange(x.l, 6).setValue('Pago');
+    contas.getRange(x.l, 12).setValue((x.r[11] ? x.r[11] + ' · ' : '') + nota);
+    contas.getRange(x.l, 14).setValue(quando);
+    return { marcado: true, id: String(x.r[9]), fornecedor: x.r[0], valor: x.r[3], mensagem: x.r[0] + ' marcado como pago' };
+  }
+  if (achadas.length > 1) {
+    throw erro('ambiguo', 'Mais de uma conta em aberto combina (' + achadas.slice(0, 5).map(x => x.r[0] + ' ' + x.r[3]).join('; ') +
+      '). Envie o "id" (use a operação listar) ou o "vencimento".');
+  }
+  if (req.criarSeNaoExistir) {
+    const fornecedor = String(req.fornecedor || '').trim().slice(0, 60);
+    const valor = req.valor != null && req.valor !== '' ? Number(String(req.valor).replace(',', '.')) : '';
+    if (!fornecedor) throw erro('dados', 'Para criar a conta, informe "fornecedor".');
+    const id = 'integ-' + Utilities.getUuid().slice(0, 8);
+    contas.appendRow([fornecedor, new Date(), dataIso(req.vencimento) || quando, valor, '', 'Pago',
+      String(req.descricao || 'Lançado pelo ' + programa).slice(0, 150), '', programa, id, '', nota, '', quando]);
+    return { marcado: true, criado: true, id: id, fornecedor: fornecedor, valor: valor,
+             mensagem: fornecedor + ' não estava na Central: lançado já como pago' };
+  }
+  throw erro('nao_achou', 'Nenhuma conta em aberto combina com ' + (req.id ? 'o id ' + req.id : '"' + (req.fornecedor || '') + '" de ' +
+    (req.valor != null ? 'R$ ' + req.valor : 'qualquer valor')) + '. Use "criarSeNaoExistir": true para lançar como pago mesmo assim.');
+}
+
+function integracaoDesmarcar(req, programa) {
+  const { contas, achadas } = integracaoAchar(req, false);
+  const pagas = achadas.filter(x => x.r[5] === 'Pago');
+  if (pagas.length !== 1) throw erro('nao_achou', pagas.length ? 'Mais de uma conta paga combina; envie o "id".' : 'Nenhuma conta paga combina.');
+  const x = pagas[0];
+  contas.getRange(x.l, 6).setValue('A pagar');
+  contas.getRange(x.l, 14).setValue('');
+  const limpa = String(x.r[11] || '').replace(/( · )?pago pelo [^·]*$/, '').trim();
+  contas.getRange(x.l, 12).setValue((limpa ? limpa + ' · ' : '') + 'desmarcado pelo ' + programa);
+  return { desmarcado: true, id: String(x.r[9]), mensagem: x.r[0] + ' voltou para "a pagar"' };
 }
 
 // ---------- Login ----------

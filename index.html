@@ -225,6 +225,15 @@
   .xml-status .nao { color: var(--soon); font-weight: 600; }
   .card.xml .links { padding: 0 14px 12px; }
   .card.lancada { opacity: .78; }
+  .integ-nova { background: var(--soon-bg); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 13.5px; }
+  .integ-nova code { display: block; word-break: break-all; background: var(--card); padding: 8px; border-radius: 8px; margin: 6px 0 8px; font-size: 13px; }
+  .integ-nova .btn { width: 100%; }
+  .integ-log { list-style: none; padding: 0 18px; margin: 4px 0 0; font-size: 12.5px; }
+  .integ-log li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  #integCriar { display: block; width: calc(100% - 36px); margin: 8px 18px 0; }
+  .integ-nova { margin: 8px 18px !important; }
+  .integ-log b { font-weight: 600; }
+  .integ-log .ok { color: var(--ok); } .integ-log .er { color: var(--late); }
   .card.xml .actions .btn { white-space: nowrap; font-size: 13px; padding: 9px 6px; min-width: 0; }
   body.modo-xml .fab { display: none; }
   a.btn { text-decoration: none; }
@@ -368,6 +377,17 @@
     <p class="note">Quando chegar um comprovante desse e-mail, a conta é marcada como paga: pelo código do boleto, ou pelo valor quando só uma conta em aberto tiver esse valor. Se ficar em dúvida, não mexe em nada.</p>
     <button class="btn" type="submit" id="salvarComp">Adicionar e-mail de comprovante</button>
   </form>
+  <p class="sec">Integrações com outros programas</p>
+  <p class="note" style="padding:0 18px">Para outro programa (ex.: RH Firme) marcar contas como pagas aqui. Ele usa uma chave própria, nunca a sua senha.</p>
+  <ul class="forn-list" id="integList"><li><div><span>Carregando…</span></div></li></ul>
+  <div class="integ-nova" id="integNova" hidden>
+    <p><b>Chave criada.</b> Ela só aparece agora: copie as instruções e cole na conversa do outro programa.</p>
+    <code id="integChave"></code>
+    <button class="btn primary" type="button" id="integCopiar">Copiar instruções para o programa</button>
+  </div>
+  <button class="btn" type="button" id="integCriar">Criar chave para outro programa</button>
+  <p class="sec" style="margin-top:14px">Últimos pedidos recebidos</p>
+  <ul class="integ-log" id="integLog"></ul>
   <p class="sec">Nova empresa</p>
   <form class="add" id="formForn">
     <label>Nome da empresa *<input id="nNome" required maxlength="60" placeholder="Ex.: Vivo, Condomínio"></label>
@@ -1290,7 +1310,85 @@
     if (!f || !confirm('Parar de criar a conta "' + f.nome + '" todo mês?\nAs que já estão na lista continuam.')) return;
     b.disabled = true; await atualizar('pararFixa', [f.id]);
   });
-  $('btnForn').addEventListener('click', () => { renderForn(); dlgF.showModal(); });
+  $('btnForn').addEventListener('click', () => { renderForn(); dlgF.showModal(); carregarIntegracoes(); });
+
+  // ---------- Integrações com outros programas ----------
+  let integ = { chaves: [], log: [] }, chaveNova = null;
+  function renderInteg() {
+    $('integList').innerHTML = integ.chaves.length ? integ.chaves.map(k => `
+      <li><div><b>${esc(k.nome)}</b><span>criada em ${esc(k.criada)} · ${k.uso ? 'último uso ' + esc(k.uso) : 'ainda não usada'}</span></div>
+      <button class="x" type="button" data-revogar="${esc(k.id)}">Revogar</button></li>`).join('')
+      : '<li><div><span>Nenhum programa conectado ainda.</span></div></li>';
+    $('integLog').innerHTML = integ.log.length ? integ.log.map(l => `
+      <li><b>${esc(l.quando)}</b> · ${esc(l.programa)} · ${esc(l.op)}${l.dados ? ' <span style="color:var(--muted)">(' + esc(l.dados) + ')</span>' : ''}<br>
+      <span class="${/^ok/.test(l.resultado) ? 'ok' : 'er'}">${esc(l.resultado)}</span></li>`).join('')
+      : '<li style="color:var(--muted)">Nenhum pedido de outro programa chegou até agora.</li>';
+  }
+  async function carregarIntegracoes() {
+    try { integ = await chamar('listarIntegracoes'); renderInteg(); } catch (e) { $('integList').innerHTML = '<li><div><span>' + esc(e.message) + '</span></div></li>'; }
+  }
+  function instrucoesIntegracao(nome, chave) {
+    const url = lerSessao().url;
+    return `Conectar o ${nome} à Central dos Boletos para marcar contas como pagas.
+
+ENDEREÇO (POST): ${url}
+CHAVE: ${chave}
+
+Regras do pedido:
+- Método POST, cabeçalho "Content-Type: text/plain;charset=utf-8" (assim o navegador não faz pré-verificação CORS), corpo em JSON.
+- O endereço responde com redirecionamento (302) do Google: siga o redirecionamento (fetch já faz isso sozinho; no curl use -L).
+- Toda resposta é JSON: {"ok":true,"dados":{...}} ou {"ok":false,"erro":"codigo","mensagem":"texto"}. Mostre a "mensagem" ao usuário quando ok for false.
+- Guarde a chave nas configurações do programa, não no código público.
+
+Campos comuns em todo pedido: "acao":"integracao", "chave":"<CHAVE>", "programa":"${nome}", "op":"<operação>"
+
+Operações:
+1) Testar a conexão:
+   {"acao":"integracao","chave":"<CHAVE>","programa":"${nome}","op":"teste"}
+2) Listar contas em aberto (para mostrar ou escolher o id):
+   {"acao":"integracao","chave":"<CHAVE>","programa":"${nome}","op":"listar"}
+   -> dados: [{"id","fornecedor","vencimento":"AAAA-MM-DD","valor","status"}]
+3) Marcar como pago (chamar no momento em que o usuário marcar pago no ${nome}):
+   {"acao":"integracao","chave":"<CHAVE>","programa":"${nome}","op":"marcarPago",
+    "fornecedor":"Nome como está na Central", "valor":1500.00, "vencimento":"2026-11-30", "data":"2026-11-19",
+    "criarSeNaoExistir":true}
+   - Pode mandar "id" em vez de fornecedor/valor (o id vem da operação listar).
+   - Sem id, a Central procura a conta em aberto com nome parecido, valor igual e vencimento até 10 dias de diferença.
+   - Se achar mais de uma, responde erro "ambiguo": mande o "id" ou o "vencimento".
+   - Com "criarSeNaoExistir":true, se não achar nenhuma, lança a conta já como paga (bom para salários e vales).
+4) Desfazer (se o usuário desmarcar no ${nome}):
+   {"acao":"integracao","chave":"<CHAVE>","programa":"${nome}","op":"desmarcarPago","id":"<id devolvido no marcarPago>"}
+
+Exemplo em JavaScript:
+fetch("${url}", {method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
+  body: JSON.stringify({acao:"integracao", chave:CHAVE, programa:"${nome}", op:"marcarPago", fornecedor:"Salário Maria", valor:1500, data:"2026-11-19", criarSeNaoExistir:true})
+}).then(r => r.json()).then(r => { if (!r.ok) alert(r.mensagem); });
+
+Cada pedido fica registrado na Central (Empresas → Integrações → Últimos pedidos recebidos), com o resultado.`;
+  }
+  $('integCriar').addEventListener('click', async () => {
+    const nome = prompt('Nome do programa que vai se conectar:', 'RH Firme');
+    if (!nome) return;
+    const b = $('integCriar'); b.disabled = true;
+    try {
+      chaveNova = await chamar('criarChaveIntegracao', nome);
+      $('integChave').textContent = chaveNova.chave; $('integNova').hidden = false;
+      await carregarIntegracoes();
+    } catch (e) { toast(e.message); }
+    b.disabled = false;
+  });
+  $('integCopiar').addEventListener('click', async () => {
+    if (!chaveNova) return;
+    await copiar(instrucoesIntegracao(chaveNova.nome, chaveNova.chave));
+    toast('Instruções copiadas: cole na conversa do ' + chaveNova.nome);
+  });
+  $('integList').addEventListener('click', async ev => {
+    const b = ev.target.closest('button[data-revogar]'); if (!b) return;
+    const k = integ.chaves.find(x => x.id === b.dataset.revogar);
+    if (!k || !confirm('Revogar a chave de "' + k.nome + '"? Esse programa para de conseguir marcar contas aqui.')) return;
+    b.disabled = true;
+    try { integ = await chamar('revogarChaveIntegracao', k.id); renderInteg(); toast('Chave revogada'); } catch (e) { toast(e.message); b.disabled = false; }
+  });
   $('fecharForn').addEventListener('click', () => dlgF.close());
   $('fornList').addEventListener('click', async ev => {
     const b = ev.target.closest('button[data-i]'); if (!b) return;
