@@ -612,16 +612,45 @@ function integracaoAchar(req, soAbertas) {
   const nome = chaveForn(req.fornecedor);
   const valor = req.valor != null && req.valor !== '' ? Number(String(req.valor).replace(',', '.')) : null;
   const venc = dataIso(req.vencimento);
+  const pago = dataIso(req.data);
   if (!nome && valor === null) throw erro('dados', 'Informe "id", ou "fornecedor" e "valor".');
-  const achadas = linhas.filter(x => {
-    if (String(x.r[8]).indexOf('DDA') >= 0) return false;
-    const k = chaveForn(x.r[0]);
-    if (nome && !(k === nome || k.indexOf(nome) >= 0 || nome.indexOf(k) >= 0)) return false;
-    if (valor !== null && !(typeof x.r[3] === 'number' && Math.abs(x.r[3] - valor) < 0.01)) return false;
-    if (venc && x.r[2] instanceof Date && Math.abs(x.r[2] - venc) > 10 * 864e5) return false;
+  const nomes = nomesEquivalentes(nome);          // razão social -> nome cadastrado (ex.: NOTARO ALIMENTOS -> Natto)
+  const bateNome = k => nomes.some(n => k === n || (n.length >= 4 && k.indexOf(n) >= 0) || (k.length >= 4 && n.indexOf(k) >= 0));
+  const bateValor = x => valor === null || (typeof x.r[3] === 'number' && Math.abs(x.r[3] - valor) < 0.01);
+  const perto = x => {
+    if (!(x.r[2] instanceof Date)) return true;
+    if (venc) return Math.abs(x.r[2] - venc) <= 10 * 864e5;
+    if (pago) return Math.abs(x.r[2] - pago) <= 45 * 864e5;    // sem vencimento: até 45 dias da data do pagamento
     return true;
-  });
+  };
+  const candidatas = linhas.filter(x => String(x.r[8]).indexOf('DDA') < 0);
+  let achadas = candidatas.filter(x => (!nome || bateNome(chaveForn(x.r[0]))) && bateValor(x) && perto(x));
+  // Plano B: o nome não bateu, mas existe UMA única conta com esse valor exato e data próxima
+  if (!achadas.length && valor !== null && nome) {
+    const soValor = candidatas.filter(x => typeof x.r[3] === 'number' && Math.abs(x.r[3] - valor) < 0.01 && perto(x));
+    if (soValor.length === 1) achadas = soValor;
+  }
   return { contas: contas, achadas: achadas };
+}
+
+// Nomes que significam a mesma empresa: o próprio, e o nome cadastrado de quem emitiu NF-e com essa razão social
+function nomesEquivalentes(nome) {
+  const lista = [nome];
+  if (!nome) return lista;
+  try {
+    const aba = planilha().getSheetByName(ABA_XML);
+    if (aba && aba.getLastRow() > 1) {
+      const acharNome = nomeDoFornecedor();
+      aba.getRange(2, 1, aba.getLastRow() - 1, 12).getValues().forEach(r => {
+        const razao = chaveForn(r[4]);
+        if (!razao || !(razao === nome || razao.indexOf(nome) >= 0 || nome.indexOf(razao) >= 0)) return;
+        const cad = chaveForn(acharNome(String(r[11])));
+        if (cad && lista.indexOf(cad) < 0) lista.push(cad);
+      });
+    }
+    // contas criadas pelas parcelas da NF-e guardam o nome cadastrado; a razão social está na aba XMLs
+  } catch (e) { console.warn('Nomes equivalentes: ' + e); }
+  return lista;
 }
 
 function integracaoMarcarPago(req, programa) {
@@ -633,7 +662,10 @@ function integracaoMarcarPago(req, programa) {
     contas.getRange(x.l, 6).setValue('Pago');
     contas.getRange(x.l, 12).setValue((x.r[11] ? x.r[11] + ' · ' : '') + nota);
     contas.getRange(x.l, 14).setValue(quando);
-    return { marcado: true, id: String(x.r[9]), fornecedor: x.r[0], valor: x.r[3], mensagem: x.r[0] + ' marcado como pago' };
+    const nomeEnviado = chaveForn(req.fornecedor);
+    const msgExtra = nomeEnviado && chaveForn(x.r[0]) !== nomeEnviado && !(chaveForn(x.r[0]).indexOf(nomeEnviado) >= 0 || nomeEnviado.indexOf(chaveForn(x.r[0])) >= 0)
+      ? ' (recebido como "' + req.fornecedor + '")' : '';
+    return { marcado: true, id: String(x.r[9]), fornecedor: x.r[0], valor: x.r[3], mensagem: x.r[0] + ' marcado como pago' + msgExtra };
   }
   if (achadas.length > 1) {
     throw erro('ambiguo', 'Mais de uma conta em aberto combina (' + achadas.slice(0, 5).map(x => x.r[0] + ' ' + x.r[3]).join('; ') +
@@ -966,6 +998,10 @@ function buscarBoletosSemTrava() {
 
         const link = 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(minhaConta()) +
                      '#all/' + msg.getThread().getId();
+        // Já foi pago e lançado por outro programa (ex.: RH Firme)? Não cria de novo como "a pagar".
+        const jaPago = dados.valor && dados.vencimento ? vals.findIndex(r => String(r[9]).indexOf('integ-') === 0 &&
+          r[5] === 'Pago' && mesmaConta(r[3], r[2], dados.valor, dados.vencimento)) : -1;
+        if (jaPago >= 0) { arquivarIds([id]); idsJaLidos.add(id); return; }
         // Já existe a conta criada pela NF-e (mesmo valor, vencimento parecido)? Completa ela com o boleto.
         const daNota = dados.valor && dados.vencimento ? vals.findIndex(r => String(r[8]).indexOf('XML da NF-e') === 0 &&
           r[5] !== 'Pago' && mesmaConta(r[3], r[2], dados.valor, dados.vencimento)) : -1;
