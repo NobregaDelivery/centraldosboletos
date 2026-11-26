@@ -2434,8 +2434,8 @@ function niboSincronizar(manual) {
         if (!g.isPayment || g.isPaid) return;
         const id = 'nibo-' + g.id;
         const dados = g.barcode ? extrairDados(String(g.barcode)) : { linha: '', valor: null };
-        const valor = typeof g.value === 'number' && g.value > 0 ? g.value : dados.valor;
         const pix = g.qrCode && pixValido(String(g.qrCode)) ? String(g.qrCode) : '';
+        const valor = typeof g.value === 'number' && g.value > 0 ? g.value : (dados.valor || valorDoPix(pix));
         if (!valor && !dados.linha && !pix) return;                 // recibo/resumo sem guia para pagar
         const venc = niboData(g.dueDate);
         const assunto = (g.name + (g.accrual ? ' · competência ' + g.accrual : '') + (g.complement ? ' · ' + g.complement : '')).slice(0, 150);
@@ -2445,7 +2445,7 @@ function niboSincronizar(manual) {
             try { niboFerramenta('marcar_documento_pago', { empresaId: emp.id, documentoId: g.id }); avisadas++; } catch (e) { console.warn('Nibo marcar: ' + e); }
             return;
           }
-          const mudou = (valor && r[3] !== valor) || (venc && (!(r[2] instanceof Date) || r[2].getTime() !== venc.getTime())) ||
+          const mudou = (valor && r[3] !== valor && !(typeof r[3] === 'number' && Math.abs(r[3] - valor) < 0.005)) || (venc && (!(r[2] instanceof Date) || r[2].getTime() !== venc.getTime())) ||
                         (dados.linha && !r[4]) || (pix && !r[10]);
           if (mudou) {
             contas.getRange(l, 3, 1, 3).setValues([[venc || r[2], valor || r[3], r[4] || dados.linha || '']]);
@@ -2517,4 +2517,16 @@ function niboPdf(id) {
     } catch (err) { console.warn('Nibo PDF: ' + err); }
   }
   throw new Error('Não consegui baixar a guia no Nibo agora.');
+}
+
+// Valor de um Pix copia e cola (campo 54 do padrão EMV), se tiver
+function valorDoPix(s) {
+  s = String(s || '');
+  for (let i = 0; i + 4 <= s.length;) {
+    const id = s.substr(i, 2), n = Number(s.substr(i + 2, 2));
+    if (isNaN(n)) return null;
+    if (id === '54') { const v = Number(s.substr(i + 4, n)); return v > 0 ? v : null; }
+    i += 4 + n;
+  }
+  return null;
 }
