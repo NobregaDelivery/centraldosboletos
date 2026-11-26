@@ -334,7 +334,7 @@ function estado(msg) {
   try { esperadas = analisarPadroes(contas); } catch (e) { console.warn('Padrões: ' + e); }
   return { contas: contas, fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes,
            esperadas: esperadas, empresas: lerConfigEmpresas(), fixas: getFixas(),
-           comprovantes: getRemetentesComprovante(), msg: msg || '' };
+           comprovantes: getRemetentesComprovante(), nibo: niboStatus(), msg: msg || '' };
 }
 
 function adicionarFornecedor(f) {
@@ -408,6 +408,7 @@ function excluirConta(id) {
 // PDFs anexos do e-mail, para o app ler o QR Code do Pix no navegador
 function getPdfs(id) {
   if (!id || /^manual-/.test(id)) return [];
+  if (String(id).indexOf('nibo-') === 0) return niboPdf(id);
   let msg;
   try { msg = GmailApp.getMessageById(id); }
   catch (e) { throw new Error('Esse boleto chegou em outra conta de e-mail. Abra o e-mail nela e use "Colar Pix".'); }
@@ -433,6 +434,7 @@ function atualizarConta(id, campos) {
   if (campos.status) {
     contas.getRange(linha, 6).setValue(campos.status);
     contas.getRange(linha, 14).setValue(campos.status === 'Pago' ? new Date() : ''); // data em que foi marcado pago
+    if (String(id).indexOf('nibo-') === 0) niboAvisarPagamento(id, campos.status === 'Pago');
   }
   if (campos.vencimento !== undefined) {
     const p = String(campos.vencimento).split('-');
@@ -469,6 +471,10 @@ const FUNCOES_API = {
   removerComprovante:  (email) => { removerRemetenteComprovante(email); return getRemetentesComprovante(); },
   listarIntegracoes:   () => listarIntegracoes(),
   renomearEmpresa:     (antigo, novo) => { renomearEmpresa(antigo, novo); return estado(''); },
+  niboIniciar:         () => niboIniciar(),
+  niboConcluir:        (code, state) => niboConcluir(code, state),
+  niboSincronizarAgora: () => { const r = niboSincronizar(true); return estado(r.msg); },
+  niboDesconectar:     () => { niboDesconectar(); return estado('Nibo desconectado'); },
   criarChaveIntegracao:(nome) => criarChaveIntegracao(nome),
   revogarChaveIntegracao: (id) => { revogarChaveIntegracao(id); return listarIntegracoes(); },
   buscarXmlsAgora:     () => { const n = buscarXmlsComTrava(XML_DIAS_INICIO); return { xmls: getXmls(), msg: n > 0 ? n + ' XML(s) novo(s)' : 'Nenhum XML novo' }; }
@@ -1054,6 +1060,7 @@ function buscarBoletosSemTrava() {
   try { limparHistorico(); } catch (e) { console.warn('Histórico: ' + e); }
   try { gerarContasFixas(); } catch (e) { console.warn('Contas fixas: ' + e); }
   try { buscarXmlsDaRodada(); } catch (e) { console.warn('XMLs: ' + e); }
+  try { niboSincronizar(); } catch (e) { console.warn('Nibo: ' + e); }
   try { ss.toast(novas.length + ' boleto(s) novo(s) encontrado(s).', 'Boletos', 5); } catch (e) {}
   return novas.length;
 }
@@ -2284,4 +2291,230 @@ function renomearEmpresa(antigo, novo) {
   if (cfg[ka]) { cfg[kn] = Object.assign({}, cfg[ka], { nome: novo }); delete cfg[ka];
     PropertiesService.getScriptProperties().setProperty('CONFIG_EMPRESAS', JSON.stringify(cfg)); }
   return n;
+}
+
+// ===================== NIBO (GUIAS DA CONTABILIDADE) =====================
+// Conecta no Portal do Cliente do Nibo (o mesmo acesso que a IA usa, via MCP) e traz as guias
+// que o escritório contábil enviou: DAS, FGTS, DARF, ICMS... com valor, vencimento, código de barras e Pix.
+// Marcar pago aqui avisa o escritório no Nibo; guia marcada paga no Nibo fica paga aqui.
+const NIBO_MCP = 'https://mcp-portaldocliente.nibo.com.br/mcp';
+const NIBO_AUTH = 'https://passport.nibo.com.br';
+const NIBO_VOLTA = 'https://nobregadelivery.github.io/centraldosboletos/';  // página do app que recebe o retorno do login
+const NIBO_ESCOPO = 'openid email profile offline_access';
+
+function niboProps() { return PropertiesService.getScriptProperties(); }
+function niboLer(k) { try { return JSON.parse(niboProps().getProperty(k) || 'null'); } catch (e) { return null; } }
+function niboGravar(k, v) { if (v == null) niboProps().deleteProperty(k); else niboProps().setProperty(k, JSON.stringify(v)); }
+function base64Url(bytes) { return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, ''); }
+
+function niboStatus() {
+  if (CONFIG.PLANILHA_PRINCIPAL) return null;
+  const t = niboLer('NIBO_TOKEN'), info = niboLer('NIBO_INFO') || {};
+  return { conectado: !!(t && t.r), empresas: (niboLer('NIBO_EMPRESAS') || []).map(e => e.nome),
+           ultima: info.ultima || '', resumo: info.resumo || '', erro: info.erro || '' };
+}
+
+function niboIniciar() {
+  if (CONFIG.PLANILHA_PRINCIPAL) throw new Error('Conecte o Nibo pela conta principal.');
+  let cli = niboLer('NIBO_CLIENTE');
+  if (!cli || cli.volta !== NIBO_VOLTA) {
+    const r = UrlFetchApp.fetch(NIBO_AUTH + '/register', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ client_name: 'Central dos Boletos', redirect_uris: [NIBO_VOLTA], grant_types: ['authorization_code', 'refresh_token'],
+                                response_types: ['code'], token_endpoint_auth_method: 'none', scope: NIBO_ESCOPO }) });
+    if (r.getResponseCode() >= 300) throw new Error('O Nibo recusou o cadastro da Central (' + r.getResponseCode() + ').');
+    cli = { id: JSON.parse(r.getContentText()).client_id, volta: NIBO_VOLTA };
+    niboGravar('NIBO_CLIENTE', cli);
+  }
+  const verif = gerarAleatorio(64).replace(/[^A-Za-z0-9]/g, 'a');
+  const desafio = base64Url(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, verif, Utilities.Charset.US_ASCII));
+  const state = 'cb' + gerarAleatorio(24).replace(/[^A-Za-z0-9]/g, 'x');
+  niboGravar('NIBO_PKCE', { v: verif, s: state, t: Date.now() });
+  const q = { response_type: 'code', client_id: cli.id, redirect_uri: NIBO_VOLTA, scope: NIBO_ESCOPO,
+              code_challenge: desafio, code_challenge_method: 'S256', state: state, resource: NIBO_MCP };
+  return { url: NIBO_AUTH + '/Authorize?' + Object.keys(q).map(k => k + '=' + encodeURIComponent(q[k])).join('&') };
+}
+
+function niboConcluir(code, state) {
+  const p = niboLer('NIBO_PKCE'), cli = niboLer('NIBO_CLIENTE');
+  if (!p || !cli || p.s !== state || Date.now() - p.t > 30 * 60e3) throw new Error('O retorno do Nibo não confere. Clique em "Conectar ao Nibo" de novo.');
+  niboToken({ grant_type: 'authorization_code', code: String(code), redirect_uri: NIBO_VOLTA, client_id: cli.id, code_verifier: p.v, resource: NIBO_MCP });
+  niboGravar('NIBO_PKCE', null);
+  const emp = niboFerramenta('listar_empresas', {});
+  niboGravar('NIBO_EMPRESAS', (emp || []).map(e => ({ id: e.customerId, nome: e.name, cnpj: e.cnpj })));
+  const r = niboSincronizar(true);
+  return estado('Nibo conectado · ' + r.msg);
+}
+
+function niboDesconectar() { ['NIBO_TOKEN', 'NIBO_EMPRESAS', 'NIBO_INFO', 'NIBO_PKCE'].forEach(k => niboProps().deleteProperty(k)); }
+
+// Pede/renova o acesso no Nibo e guarda
+function niboToken(form) {
+  const r = UrlFetchApp.fetch(NIBO_AUTH + '/token', { method: 'post', payload: form, muteHttpExceptions: true });
+  const txt = r.getContentText();
+  let j = {}; try { j = JSON.parse(txt); } catch (e) {}
+  if (r.getResponseCode() >= 300 || !j.access_token) {
+    const e = new Error('O Nibo não liberou o acesso (' + r.getResponseCode() + (j.error ? ' ' + j.error : '') + ').');
+    e.codigo = j.error || 'token'; throw e;
+  }
+  const antigo = niboLer('NIBO_TOKEN') || {};
+  const t = { a: j.access_token, r: j.refresh_token || antigo.r, exp: Date.now() + (Number(j.expires_in) || 1800) * 1000 };
+  niboGravar('NIBO_TOKEN', t);
+  return t;
+}
+
+function niboAcesso(forcar) {
+  const t = niboLer('NIBO_TOKEN'), cli = niboLer('NIBO_CLIENTE');
+  if (!t || !t.r || !cli) throw new Error('Nibo não conectado.');
+  if (!forcar && t.exp - Date.now() > 120e3) return t.a;
+  try {
+    return niboToken({ grant_type: 'refresh_token', refresh_token: t.r, client_id: cli.id, resource: NIBO_MCP }).a;
+  } catch (e) {
+    if (/invalid_grant|invalid_client/.test(e.codigo)) {
+      niboGravar('NIBO_TOKEN', null);
+      niboInfo({ erro: 'O acesso ao Nibo expirou. Abra Empresas e clique em "Conectar ao Nibo".' });
+    }
+    throw e;
+  }
+}
+
+// Chama uma ferramenta do MCP do Portal do Cliente e devolve o JSON do resultado
+function niboFerramenta(nome, args, tentou) {
+  const r = UrlFetchApp.fetch(NIBO_MCP, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + niboAcesso(tentou), Accept: 'application/json, text/event-stream' },
+    payload: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: nome, arguments: args || {} } }) });
+  if (r.getResponseCode() === 401 && !tentou) return niboFerramenta(nome, args, true);
+  const txt = r.getContentText();
+  if (r.getResponseCode() >= 300) throw new Error('Nibo respondeu ' + r.getResponseCode() + ': ' + txt.slice(0, 150));
+  const dados = txt.match(/^data: (.*)$/gm);
+  const j = JSON.parse(dados ? dados[dados.length - 1].slice(6) : txt);
+  if (j.error) throw new Error('Nibo: ' + (j.error.message || JSON.stringify(j.error)).slice(0, 200));
+  const texto = ((j.result && j.result.content) || []).map(x => x.text || '').join('');
+  if (j.result && j.result.isError) throw new Error('Nibo: ' + texto.slice(0, 200));
+  try { return JSON.parse(texto); } catch (e) { return texto; }
+}
+
+function niboInfo(campos) { niboGravar('NIBO_INFO', Object.assign(niboLer('NIBO_INFO') || {}, campos)); }
+
+// Nome que aparece na lista: "DAS - Documento de Arrecadação do Simples Nacional" -> "DAS Simples Nacional"
+function niboNomeGuia(n) {
+  n = String(n || '').trim();
+  if (/^DAS\b/i.test(n)) return 'DAS Simples Nacional';
+  if (/^DARF\b/i.test(n)) return n.replace(/\s+E\s+/g, ' e ');
+  return n.slice(0, 60);
+}
+function niboData(s) { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : ''; }
+
+function niboListar(empresaId, situacao, maximo) {
+  const itens = [];
+  for (let pular = 0; pular < maximo; pular += 50) {
+    const r = niboFerramenta('listar_documentos_recebidos', { empresaId: empresaId, situacao: situacao, pular: pular, quantidade: 50 });
+    (r && r.items || []).forEach(i => itens.push(i));
+    if (!r || !r.hasMore) break;
+  }
+  return itens;
+}
+
+// Traz as guias novas, atualiza as existentes e acerta quem está pago dos dois lados
+function niboSincronizar(manual) {
+  if (CONFIG.PLANILHA_PRINCIPAL) return { msg: '' };
+  const tok = niboLer('NIBO_TOKEN');
+  if (!tok || !tok.r) return { msg: 'Nibo não conectado' };
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  garantirCabecalho(contas);
+  const n = contas.getLastRow() - 1;
+  const vals = n > 0 ? contas.getRange(2, 1, n, CAB_CONTAS.length).getValues() : [];
+  const linhaDe = {}; vals.forEach((r, i) => { if (String(r[9]).indexOf('nibo-') === 0) linhaDe[String(r[9])] = i; });
+  const arquivados = new Set(lerIdsArquivados());
+  const tz = Session.getScriptTimeZone();
+  let novas = 0, pagasAqui = 0, avisadas = 0, atualizadas = 0;
+  try {
+    (niboLer('NIBO_EMPRESAS') || []).forEach(emp => {
+      const abertas = niboListar(emp.id, 'a_pagar', 200);
+      abertas.forEach(g => {
+        if (!g.isPayment || g.isPaid) return;
+        const id = 'nibo-' + g.id;
+        const dados = g.barcode ? extrairDados(String(g.barcode)) : { linha: '', valor: null };
+        const valor = typeof g.value === 'number' && g.value > 0 ? g.value : dados.valor;
+        const pix = g.qrCode && pixValido(String(g.qrCode)) ? String(g.qrCode) : '';
+        if (!valor && !dados.linha && !pix) return;                 // recibo/resumo sem guia para pagar
+        const venc = niboData(g.dueDate);
+        const assunto = (g.name + (g.accrual ? ' · competência ' + g.accrual : '') + (g.complement ? ' · ' + g.complement : '')).slice(0, 150);
+        if (id in linhaDe) {
+          const i = linhaDe[id], r = vals[i], l = i + 2;
+          if (r[5] === 'Pago') {                                    // pago aqui: avisa o escritório
+            try { niboFerramenta('marcar_documento_pago', { empresaId: emp.id, documentoId: g.id }); avisadas++; } catch (e) { console.warn('Nibo marcar: ' + e); }
+            return;
+          }
+          const mudou = (valor && r[3] !== valor) || (venc && (!(r[2] instanceof Date) || r[2].getTime() !== venc.getTime())) ||
+                        (dados.linha && !r[4]) || (pix && !r[10]);
+          if (mudou) {
+            contas.getRange(l, 3, 1, 3).setValues([[venc || r[2], valor || r[3], r[4] || dados.linha || '']]);
+            if (pix && !r[10]) contas.getRange(l, 11).setValue(pix);
+            atualizadas++;
+          }
+          return;
+        }
+        if (arquivados.has(id)) return;
+        contas.appendRow([niboNomeGuia(g.name), niboData(g.sentDate) || new Date(), venc, valor || '', dados.linha || '', 'A pagar',
+          assunto, 'https://empresa.nibo.com.br/', 'Nibo (contabilidade)', id, pix,
+          String(g.note || '').slice(0, 200), 'Nibo · ' + emp.nome, '']);
+        novas++;
+        if (CONFIG.CRIAR_EVENTO_AGENDA && venc) { try { criarLembrete(niboNomeGuia(g.name), { vencimento: venc, valor: valor, linha: dados.linha }); } catch (e) {} }
+      });
+      // guias que constam pagas no Nibo: dá baixa aqui também
+      niboListar(emp.id, 'pagas', 50).forEach(g => {
+        const id = 'nibo-' + g.id;
+        if (!(id in linhaDe)) return;
+        const i = linhaDe[id], r = vals[i];
+        if (r[5] === 'Pago') return;
+        const quando = niboData(g.paidDate) || new Date();
+        contas.getRange(i + 2, 6).setValue('Pago');
+        contas.getRange(i + 2, 12).setValue((r[11] ? r[11] + ' · ' : '') + 'pago (informado no Nibo em ' + Utilities.formatDate(quando, tz, 'dd/MM') + ')');
+        contas.getRange(i + 2, 14).setValue(quando);
+        pagasAqui++;
+      });
+    });
+  } catch (e) {
+    const semAcesso = !niboLer('NIBO_TOKEN');
+    niboInfo({ ultima: Utilities.formatDate(new Date(), tz, 'dd/MM HH:mm'),
+               erro: semAcesso ? 'O acesso ao Nibo expirou. Clique em "Conectar ao Nibo" de novo.' : String(e.message || e).slice(0, 200) });
+    if (manual) throw e;
+    return { msg: 'Nibo: ' + e.message };
+  }
+  if (novas) { const t = contas.getLastRow() - 1; if (t > 1) contas.getRange(2, 1, t, CAB_CONTAS.length).sort({ column: 3, ascending: true }); }
+  const partes = [];
+  if (novas) partes.push(novas + ' guia(s) nova(s)');
+  if (atualizadas) partes.push(atualizadas + ' atualizada(s)');
+  if (pagasAqui) partes.push(pagasAqui + ' paga(s) no Nibo');
+  if (avisadas) partes.push(avisadas + ' informada(s) como paga(s) ao contador');
+  const msg = partes.length ? partes.join(', ') : 'nenhuma guia nova do Nibo';
+  niboInfo({ ultima: Utilities.formatDate(new Date(), tz, 'dd/MM HH:mm'), resumo: msg, erro: '' });
+  return { msg: msg, novas: novas };
+}
+
+// Quando a pessoa marca/desmarca pago no app, avisa o escritório no Nibo na hora (se falhar, a próxima rodada acerta)
+function niboAvisarPagamento(id, pago) {
+  if (!niboLer('NIBO_TOKEN')) return;
+  const docId = Number(String(id).replace('nibo-', ''));
+  const empresas = niboLer('NIBO_EMPRESAS') || [];
+  for (const e of empresas) {
+    try { niboFerramenta(pago ? 'marcar_documento_pago' : 'desmarcar_documento_pago', { empresaId: e.id, documentoId: docId }); return; }
+    catch (err) { console.warn('Nibo ' + (pago ? 'marcar' : 'desmarcar') + ' (' + e.nome + '): ' + err); }
+  }
+}
+
+// PDF da guia, para o app (ver/baixar e ler o QR Code)
+function niboPdf(id) {
+  const docId = Number(String(id).replace('nibo-', ''));
+  for (const e of (niboLer('NIBO_EMPRESAS') || [])) {
+    try {
+      const r = niboFerramenta('baixar_documento_recebido', { empresaId: e.id, documentoId: docId });
+      const url = typeof r === 'string' ? (r.match(/https?:\/\/\S+/) || [''])[0] : (r.url || r.link || r.downloadUrl || '');
+      if (!url) continue;
+      const f = UrlFetchApp.fetch(url.replace(/[)"'\]]+$/, ''), { muteHttpExceptions: true });
+      if (f.getResponseCode() >= 300) continue;
+      return [{ nome: (r.fileName || 'guia.pdf'), b64: Utilities.base64Encode(f.getContent()) }];
+    } catch (err) { console.warn('Nibo PDF: ' + err); }
+  }
+  throw new Error('Não consegui baixar a guia no Nibo agora.');
 }

@@ -225,6 +225,9 @@
   .xml-status .nao { color: var(--soon); font-weight: 600; }
   .card.xml .links { padding: 0 14px 12px; }
   .card.lancada { opacity: .78; }
+  .nibo-btns { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 18px 6px; }
+  .nibo-btns .btn { flex: 1 1 160px; }
+  .nibo-btns .btn[hidden], #niboSec[hidden] { display: none; }
   .integ-nova { background: var(--soon-bg); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 13.5px; }
   .integ-nova code { display: block; word-break: break-all; background: var(--card); padding: 8px; border-radius: 8px; margin: 6px 0 8px; font-size: 13px; }
   .integ-nova .btn { width: 100%; }
@@ -377,6 +380,16 @@
     <p class="note">Quando chegar um comprovante desse e-mail, a conta é marcada como paga: pelo código do boleto, ou pelo valor quando só uma conta em aberto tiver esse valor. Se ficar em dúvida, não mexe em nada.</p>
     <button class="btn" type="submit" id="salvarComp">Adicionar e-mail de comprovante</button>
   </form>
+  <div id="niboSec">
+    <p class="sec">Contabilidade (Nibo)</p>
+    <p class="note" style="padding:0 18px">Traz as guias que o escritório contábil manda pelo Nibo (DAS, FGTS, DARF, ICMS…) com valor, vencimento, código de barras e Pix. Marcar como pago aqui avisa o escritório no Nibo.</p>
+    <ul class="forn-list" id="niboList"></ul>
+    <div class="nibo-btns">
+      <button class="btn primary" type="button" id="niboConectar">Conectar ao Nibo</button>
+      <button class="btn" type="button" id="niboBuscar" hidden>Buscar guias agora</button>
+      <button class="btn" type="button" id="niboSair" hidden>Desconectar</button>
+    </div>
+  </div>
   <p class="sec">Integrações com outros programas</p>
   <p class="note" style="padding:0 18px">Para outro programa (ex.: RH Firme) marcar contas como pagas aqui. Ele usa uma chave própria, nunca a sua senha.</p>
   <ul class="forn-list" id="integList"><li><div><span>Carregando…</span></div></li></ul>
@@ -747,7 +760,7 @@
           <button class="btn" data-act="save">Salvar</button>
         </div>
         <div class="links">
-          ${c.link ? `<a href="${esc(c.link)}" target="_blank" rel="noopener">Abrir e-mail</a>` : ''}
+          ${c.link ? `<a href="${esc(c.link)}" target="_blank" rel="noopener">${/^nibo-/.test(c.id) ? 'Abrir no Nibo' : 'Abrir e-mail'}</a>` : ''}
           ${!c.pix && !manual ? `<button data-act="lerpix">Buscar Pix no PDF</button>` : ''}
           <button data-act="addpix">${c.pix ? 'Trocar Pix' : 'Colar Pix'}</button>
           <button data-act="del" class="danger">Excluir</button>
@@ -905,6 +918,7 @@
       else { contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || caixas; sugestoes = r.sugestoes || sugestoes;
              esperadas = r.esperadas || esperadas; empresas = r.empresas || empresas; fixas = r.fixas || fixas;
              comprovantes = r.comprovantes || comprovantes;
+             if (r.nibo !== undefined) { nibo = r.nibo; renderNibo(); }
              renderForn(); if (r.msg) toast(r.msg); }
       render(); return true;
     } catch (e) {
@@ -952,7 +966,7 @@
     if (autoPixRodando || !lerSessao()) return;
     autoPixRodando = true;
     const tentados = lerTentados();
-    const fila = contas.filter(c => c.status !== 'Pago' && !c.pix && !/^manual-/.test(c.id) &&
+    const fila = contas.filter(c => c.status !== 'Pago' && !c.pix && !/^(manual|nibo)-/.test(c.id) &&
                                     !/^aviso DDA/.test(c.origem || '') && !tentados.has(c.id)).slice(0, 5);
     for (const c of fila) {
       tentados.add(c.id); gravarTentados(tentados);
@@ -1406,8 +1420,60 @@ Cada pedido fica registrado na Central (Empresas → Integrações → Últimos 
     if (ok) { $('formForn').reset(); dlgF.close(); }
   });
 
+  // ---------- Nibo (guias da contabilidade) ----------
+  let nibo = null;
+  function renderNibo() {
+    $('niboSec').hidden = nibo === null;
+    if (!nibo) return;
+    const linhas = [];
+    if (nibo.conectado) {
+      linhas.push(`<li><div><b>Conectado${nibo.empresas.length ? ': ' + esc(nibo.empresas.join(', ')) : ''}</b><span>${nibo.ultima ? 'Última busca ' + esc(nibo.ultima) + (nibo.resumo ? ' · ' + esc(nibo.resumo) : '') : 'Ainda não buscou'} · busca sozinho junto com os boletos</span></div></li>`);
+    } else {
+      linhas.push('<li><div><b>Não conectado</b><span>Clique em "Conectar ao Nibo" e entre com o seu login do Nibo (o mesmo do Portal do Cliente).</span></div></li>');
+    }
+    if (nibo.erro) linhas.push(`<li><div><span style="color:var(--late)">${esc(nibo.erro)}</span></div></li>`);
+    $('niboList').innerHTML = linhas.join('');
+    $('niboConectar').textContent = nibo.conectado ? 'Reconectar' : 'Conectar ao Nibo';
+    $('niboConectar').classList.toggle('primary', !nibo.conectado);
+    $('niboBuscar').hidden = $('niboSair').hidden = !nibo.conectado;
+  }
+  $('niboConectar').addEventListener('click', async () => {
+    const b = $('niboConectar'); b.disabled = true; b.textContent = 'Abrindo o Nibo…';
+    try { const r = await chamar('niboIniciar'); location.href = r.url; }
+    catch (e) { toast(e.message); b.disabled = false; renderNibo(); }
+  });
+  $('niboBuscar').addEventListener('click', async () => {
+    const b = $('niboBuscar'); b.disabled = true; b.textContent = 'Buscando no Nibo…';
+    await atualizar('niboSincronizarAgora', [], null, 180000);
+    b.disabled = false; b.textContent = 'Buscar guias agora';
+  });
+  $('niboSair').addEventListener('click', async () => {
+    if (!confirm('Desconectar o Nibo? As guias que já estão na lista continuam.')) return;
+    await atualizar('niboDesconectar', []);
+  });
+  // Volta do login do Nibo: ?code=...&state=cb...
+  (() => {
+    const q = new URLSearchParams(location.search);
+    if (q.get('code') && /^cb/.test(q.get('state') || '')) {
+      try { sessionStorage.setItem('nibo_retorno', JSON.stringify({ code: q.get('code'), state: q.get('state') })); } catch (e) {}
+      history.replaceState(null, '', location.pathname);
+    } else if (q.get('error') && /^cb/.test(q.get('state') || '')) {
+      history.replaceState(null, '', location.pathname);
+      setTimeout(() => toast('O Nibo não autorizou a conexão.'), 500);
+    }
+  })();
+  async function concluirNibo() {
+    let p = null;
+    try { p = JSON.parse(sessionStorage.getItem('nibo_retorno') || 'null'); sessionStorage.removeItem('nibo_retorno'); } catch (e) {}
+    if (!p) return;
+    toast('Conectando ao Nibo e buscando as guias…');
+    try { const r = await chamar('niboConcluir', p.code, p.state); aplicarEstado(r); toast(r.msg); }
+    catch (e) { toast(e.message); }
+  }
+
   // ---------- Entrar / sair ----------
   function aplicarEstado(r) {
+    nibo = r.nibo === undefined ? null : r.nibo; renderNibo();
     contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || [];
     esperadas = r.esperadas || []; empresas = r.empresas || {}; fixas = r.fixas || []; comprovantes = r.comprovantes || [];
     render(); renderForn();
@@ -1424,6 +1490,7 @@ Cada pedido fica registrado na Central (Empresas → Integrações → Últimos 
       $('cSenha').value = '';
       $('conectar').classList.remove('show');
       aplicarEstado(await chamar('estado'));
+      concluirNibo();
     } catch (e) { $('cErro').textContent = e.message; }
     b.disabled = false; b.textContent = 'Entrar';
   });
@@ -1533,7 +1600,7 @@ Cada pedido fica registrado na Central (Empresas → Integrações → Últimos 
     const s = lerSessao();
     if (!s) { pedirSenha(); return; }
     $('cEmail').value = s.email || '';
-    try { aplicarEstado(await chamar('estado')); }
+    try { aplicarEstado(await chamar('estado')); concluirNibo(); }
     catch (e) { if (lerSessao()) mostrarErro(e.message); }
   })();
 </script>
