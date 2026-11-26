@@ -760,7 +760,7 @@
           <button class="btn" data-act="save">Salvar</button>
         </div>
         <div class="links">
-          ${c.link ? `<a href="${esc(c.link)}" target="_blank" rel="noopener">${/^nibo-/.test(c.id) ? 'Abrir no Nibo' : 'Abrir e-mail'}</a>` : ''}
+          ${c.link ? `<a href="${esc(c.link)}" target="_blank" rel="noopener">${/^nibo-/.test(c.id) ? 'Abrir no Nibo' : /asaas\.com\/i\//.test(c.link) ? 'Abrir cobrança' : 'Abrir e-mail'}</a>` : ''}
           ${!c.pix && !manual ? `<button data-act="lerpix">Buscar Pix no PDF</button>` : ''}
           <button data-act="addpix">${c.pix ? 'Trocar Pix' : 'Colar Pix'}</button>
           <button data-act="del" class="danger">Excluir</button>

@@ -975,6 +975,7 @@ function buscarBoletosSemTrava() {
   preencherContaAntigas(contas);
 
   const novas = [];
+  const asaasNovas = {};   // cobranças do Asaas criadas nesta rodada (para dois e-mails da mesma cobrança não virarem duas linhas)
   fornecedores.forEach(([nome, remetente, assunto, diaFixo]) => {
     let q = 'from:' + String(remetente).trim() + ' newer_than:' + CONFIG.BUSCAR_ULTIMOS_DIAS + 'd';
     if (assunto) q += ' subject:"' + String(assunto).replace(/"/g, '') + '"';
@@ -993,6 +994,15 @@ function buscarBoletosSemTrava() {
           novas.push([aviso.emissor, msg.getDate(), '', '', '', 'A pagar', msg.getSubject(), linkAviso,
                       'aviso DDA (' + aviso.banco + ')', id, '',
                       'Confira valor e vencimento no app do ' + aviso.banco, contaDestino(msg), '']);
+          idsJaLidos.add(id);
+          return;
+        }
+
+        // Cobrança do Asaas: uma linha por cobrança (lembretes não duplicam), com boleto e Pix da página do Asaas
+        const asaasId = asaasIdDoTexto(msg.getPlainBody() + ' ' + msg.getBody());
+        if (asaasId) {
+          const feito = asaasDoEmail(msg, asaasId, nome, vals, asaasNovas, contas);
+          if (feito.nova) novas.push(feito.nova); else arquivarIds([id]);
           idsJaLidos.add(id);
           return;
         }
@@ -1061,6 +1071,7 @@ function buscarBoletosSemTrava() {
   try { gerarContasFixas(); } catch (e) { console.warn('Contas fixas: ' + e); }
   try { buscarXmlsDaRodada(); } catch (e) { console.warn('XMLs: ' + e); }
   try { niboSincronizar(); } catch (e) { console.warn('Nibo: ' + e); }
+  try { asaasAtualizar(); } catch (e) { console.warn('Asaas: ' + e); }
   try { ss.toast(novas.length + ' boleto(s) novo(s) encontrado(s).', 'Boletos', 5); } catch (e) {}
   return novas.length;
 }
@@ -1258,13 +1269,8 @@ function lerPdfs(msg) {
   const r = { valor: null, vencimento: null, linha: null, pix: null };
   let achou = false;
   for (const pdf of pdfs) {
-    let docId = null;
     try {
-      const arq = Drive.Files.create(
-        { name: 'tmp_boleto_' + Date.now(), mimeType: MimeType.GOOGLE_DOCS },
-        pdf.copyBlob(), { ocrLanguage: 'pt' });
-      docId = arq.id;
-      const texto = DocumentApp.openById(docId).getBody().getText();
+      const texto = textoDoPdf(pdf.copyBlob());
       const d = extrairDados(texto);
       // Linha digitável e vencimento vêm juntos do mesmo PDF; Pix pode estar em outro
       if (!r.linha && !r.vencimento && (d.linha || d.vencimento)) {
@@ -1275,11 +1281,21 @@ function lerPdfs(msg) {
       if (r.linha && r.pix) break;
     } catch (e) {
       console.warn('Falha ao ler PDF ' + pdf.getName() + ': ' + e);
-    } finally {
-      if (docId) try { DriveApp.getFileById(docId).setTrashed(true); } catch (e) {}
     }
   }
   return achou ? r : null;
+}
+
+// Converte um PDF em texto (Google Docs com OCR) e apaga o arquivo temporário
+function textoDoPdf(blob) {
+  let docId = null;
+  try {
+    const arq = Drive.Files.create({ name: 'tmp_boleto_' + Date.now(), mimeType: MimeType.GOOGLE_DOCS }, blob, { ocrLanguage: 'pt' });
+    docId = arq.id;
+    return DocumentApp.openById(docId).getBody().getText();
+  } finally {
+    if (docId) try { DriveApp.getFileById(docId).setTrashed(true); } catch (e) {}
+  }
 }
 
 // ===================== EXTRAÇÃO DOS DADOS =====================
@@ -2529,4 +2545,133 @@ function valorDoPix(s) {
     i += 4 + n;
   }
   return null;
+}
+
+// ===================== COBRANÇAS DO ASAAS =====================
+// O e-mail do Asaas só traz valor, vencimento e o link "Visualizar cobrança" (asaas.com/i/ID).
+// A página do Asaas é pública: dali vêm o PDF do boleto (linha digitável), o Pix copia e cola e se já foi pago.
+const ASAAS = 'https://www.asaas.com';
+function asaasIdDoTexto(t) { const m = String(t || '').match(/asaas\.com\/i\/([a-z0-9]{8,30})/i); return m ? m[1].toLowerCase() : ''; }
+function asaasIdDaLinha(r) { return asaasIdDoTexto(r[7]); }
+function asaasLink(id) { return ASAAS + '/i/' + id; }
+
+// Consulta a cobrança no Asaas: { pago, linha, valor, vencimento, pix }
+function asaasDados(id, comBoleto) {
+  const r = { pago: false, linha: '', valor: null, vencimento: null, pix: '' };
+  const opc = { muteHttpExceptions: true, headers: { 'X-Requested-With': 'XMLHttpRequest' } };
+  try {
+    const p = UrlFetchApp.fetch(ASAAS + '/payment/isReceivedPayment/' + id, opc);
+    if (p.getResponseCode() === 200) r.pago = JSON.parse(p.getContentText()).success === true;
+  } catch (e) { console.warn('Asaas status ' + id + ': ' + e); }
+  if (r.pago || !comBoleto) return r;
+  try {
+    const p = UrlFetchApp.fetch(ASAAS + '/pixQrCode/createPaymentQrCode/pay_' + id, Object.assign({ method: 'post' }, opc));
+    if (p.getResponseCode() === 200) { const j = JSON.parse(p.getContentText()); if (j.payload && pixValido(j.payload)) r.pix = j.payload; }
+  } catch (e) { console.warn('Asaas Pix ' + id + ': ' + e); }
+  try {
+    const b = UrlFetchApp.fetch(ASAAS + '/b/pdf/' + id, { muteHttpExceptions: true });
+    if (b.getResponseCode() === 200 && /pdf/i.test(String(b.getHeaders()['Content-Type'] || b.getHeaders()['content-type'] || ''))) {
+      const d = extrairDados(textoDoPdf(b.getBlob().setName('boleto.pdf')));
+      r.linha = d.linha || ''; r.valor = d.valor; r.vencimento = d.vencimento;
+    }
+  } catch (e) { console.warn('Asaas boleto ' + id + ': ' + e); }
+  return r;
+}
+
+// Trata um e-mail do Asaas. Devolve { nova: linha } se for uma cobrança nova; senão atualiza a existente.
+function asaasDoEmail(msg, asaasId, nome, vals, asaasNovas, contas) {
+  const assunto = msg.getSubject(), corpo = msg.getPlainBody() || '';
+  const pagou = /pagamento\s+(foi\s+)?(confirmado|recebido)|recebemos\s+(o\s+)?seu\s+pagamento|cobran[cç]a\s+(foi\s+)?paga/i.test(assunto + ' ' + corpo.slice(0, 600));
+  const i = vals.findIndex(r => asaasIdDaLinha(r) === asaasId);
+  const pend = asaasNovas[asaasId];
+  if (i >= 0 || pend) {
+    if (pagou) {
+      if (pend && pend[5] !== 'Pago') { pend[5] = 'Pago'; pend[13] = msg.getDate(); pend[11] = 'pago (confirmado pelo Asaas)'; }
+      if (i >= 0 && vals[i][5] !== 'Pago') {
+        contas.getRange(i + 2, 6).setValue('Pago');
+        contas.getRange(i + 2, 12).setValue((vals[i][11] ? vals[i][11] + ' · ' : '') + 'pago (confirmado pelo Asaas)');
+        contas.getRange(i + 2, 14).setValue(msg.getDate());
+        vals[i][5] = 'Pago';
+      }
+    }
+    return {};                                          // lembrete da mesma cobrança: não cria outra linha
+  }
+  const doEmail = extrairDados(corpo);
+  const a = pagou ? { pago: true } : asaasDados(asaasId, true);
+  const pago = pagou || a.pago;
+  const nova = [nome, msg.getDate(), a.vencimento || doEmail.vencimento || '', a.valor || doEmail.valor || '', a.linha || '',
+                pago ? 'Pago' : 'A pagar', assunto, asaasLink(asaasId), a.linha || a.pix ? 'página do Asaas' : 'e-mail do Asaas',
+                msg.getId(), a.pix || '', pago ? 'pago (confirmado pelo Asaas)' : '', contaDestino(msg), pago ? msg.getDate() : ''];
+  asaasNovas[asaasId] = nova;
+  if (CONFIG.CRIAR_EVENTO_AGENDA && !pago && nova[2]) { try { criarLembrete(nome, { vencimento: nova[2], valor: nova[3], linha: nova[4] }); } catch (e) {} }
+  return { nova: nova };
+}
+
+// Toda rodada: junta linhas repetidas da mesma cobrança, completa boleto/Pix que faltam e dá baixa no que o Asaas já recebeu
+function asaasAtualizar() {
+  const contas = planilha().getSheetByName(ABA_CONTAS);
+  const n = contas.getLastRow() - 1;
+  if (n < 1) return;
+  const vals = contas.getRange(2, 1, n, CAB_CONTAS.length).getValues();
+  const remAsaas = {};
+  getFornecedores().forEach(f => { if (/asaas\.com/i.test(f.email)) remAsaas[f.nome] = true; });
+  const props = PropertiesService.getScriptProperties();
+  let resolvidos = {}; try { resolvidos = JSON.parse(props.getProperty('ASAAS_RESOLVIDOS') || '{}'); } catch (e) {}
+  let gmailLidos = 0, mudouResolvidos = false;
+
+  // 1) descobre a cobrança de cada linha (link novo, ou lendo o e-mail das linhas antigas)
+  const porCobranca = {};
+  vals.forEach((r, i) => {
+    let aid = asaasIdDaLinha(r);
+    const msgId = String(r[9]);
+    if (!aid && remAsaas[r[0]] && /^[0-9a-f]{12,20}$/.test(msgId)) {
+      if (msgId in resolvidos) aid = resolvidos[msgId];
+      else if (gmailLidos < 30) {
+        gmailLidos++;
+        try { const m = GmailApp.getMessageById(msgId); aid = asaasIdDoTexto(m.getPlainBody() + ' ' + m.getBody()); } catch (e) { aid = ''; }
+        resolvidos[msgId] = aid; mudouResolvidos = true;
+      }
+    }
+    if (aid) (porCobranca[aid] = porCobranca[aid] || []).push(i);
+  });
+  if (mudouResolvidos) {
+    const ks = Object.keys(resolvidos); if (ks.length > 400) ks.slice(0, ks.length - 400).forEach(k => delete resolvidos[k]);
+    props.setProperty('ASAAS_RESOLVIDOS', JSON.stringify(resolvidos));
+  }
+
+  // 2) uma linha por cobrança: fica a paga (se houver) ou a mais antiga
+  const apagar = [];
+  let consultas = 0;
+  Object.keys(porCobranca).forEach(aid => {
+    const idx = porCobranca[aid];
+    const paga = idx.find(i => vals[i][5] === 'Pago');
+    const fica = paga !== undefined ? paga : idx.slice().sort((a, b) => (vals[a][1] || 0) - (vals[b][1] || 0))[0];
+    idx.forEach(i => { if (i !== fica) apagar.push(i); });
+    const r = vals[fica], l = fica + 2;
+    // completa com a melhor informação das repetidas (vencimento/valor mais recentes)
+    idx.forEach(i => { if (i === fica) return; const o = vals[i];
+      if (o[2] instanceof Date && (!(r[2] instanceof Date) || o[1] > r[1])) r[2] = o[2];
+      if (typeof o[3] === 'number' && r[3] === '') r[3] = o[3];
+      if (!r[4] && o[4]) r[4] = o[4]; if (!r[10] && o[10]) r[10] = o[10]; });
+    r[7] = asaasLink(aid);
+    // 3) em aberto: confere no Asaas se já foi pago e busca boleto/Pix que faltam
+    if (r[5] !== 'Pago' && consultas < 15) {
+      consultas++;
+      const a = asaasDados(aid, !r[4] || !r[10]);
+      if (a.pago) { r[5] = 'Pago'; r[13] = new Date(); r[11] = (r[11] ? r[11] + ' · ' : '') + 'pago (confirmado pelo Asaas)'; }
+      else {
+        if (!r[4] && a.linha) r[4] = a.linha;
+        if (!r[10] && a.pix) r[10] = a.pix;
+        if (a.vencimento && !(r[2] instanceof Date)) r[2] = a.vencimento;
+        if (a.valor && r[3] === '') r[3] = a.valor;
+        if (a.linha || a.pix) r[8] = 'página do Asaas';
+      }
+    }
+    if (String(contas.getRange(l, 10).getValue()) === String(r[9])) contas.getRange(l, 1, 1, CAB_CONTAS.length).setValues([r]);
+  });
+  if (apagar.length) {
+    const ok = apagar.sort((a, b) => b - a).filter(i => String(contas.getRange(i + 2, 10).getValue()) === String(vals[i][9]));
+    arquivarIds(ok.map(i => String(vals[i][9])));
+    ok.forEach(i => contas.deleteRow(i + 2));
+  }
 }
