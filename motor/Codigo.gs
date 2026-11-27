@@ -40,7 +40,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('💰 Boletos')
     .addItem('1. Instalar (autorizar e configurar)', 'configurar')
     .addItem('2. Criar ou alterar meu login', 'abrirCriarLogin')
-    .addItem('3. Gerar meu cadastro para o app', 'mostrarCadastroApp')
+    .addItem('3. Ativar meu acesso (código de convite)', 'ativarComConvite')
     .addSeparator()
     .addItem('Buscar boletos agora', 'buscarBoletos')
     .addItem('Enviar alerta agora', 'enviarAlerta')
@@ -334,7 +334,7 @@ function estado(msg) {
   try { esperadas = analisarPadroes(contas); } catch (e) { console.warn('Padrões: ' + e); }
   return { contas: contas, fornecedores: getFornecedores(), caixas: caixas, sugestoes: sugestoes,
            esperadas: esperadas, empresas: lerConfigEmpresas(), fixas: getFixas(),
-           comprovantes: getRemetentesComprovante(), nibo: niboStatus(), msg: msg || '' };
+           comprovantes: getRemetentesComprovante(), nibo: niboStatus(), podeConvidar: souCentral(), msg: msg || '' };
 }
 
 function adicionarFornecedor(f) {
@@ -471,6 +471,9 @@ const FUNCOES_API = {
   removerComprovante:  (email) => { removerRemetenteComprovante(email); return getRemetentesComprovante(); },
   listarIntegracoes:   () => listarIntegracoes(),
   renomearEmpresa:     (antigo, novo) => { renomearEmpresa(antigo, novo); return estado(''); },
+  listarConvites:      () => listarConvites(),
+  criarConvite:        (nome) => criarConvite(nome),
+  cancelarConvite:     (id) => { cancelarConvite(id); return listarConvites(); },
   niboIniciar:         () => niboIniciar(),
   niboConcluir:        (code, state) => niboConcluir(code, state),
   niboSincronizarAgora: () => { const r = niboSincronizar(true); return estado(r.msg); },
@@ -490,6 +493,10 @@ function doPost(e) {
     catch (x) { registrarIntegracao('?', 'pedido inválido', '', 'erro: o corpo não é JSON (' + String(bruto).slice(0, 60) + ')'); throw x; }
     if (req.acao === 'integracao') {
       resposta = { ok: true, dados: atenderIntegracao(req) };
+    } else if (req.acao === 'convite') {
+      resposta = { ok: true, dados: atenderConvite(req) };
+    } else if (req.acao === 'diretorio') {
+      resposta = { ok: true, dados: atenderDiretorio(req) };
     } else if (req.acao === 'login') {
       resposta = { ok: true, dados: fazerLogin(req.email, req.senha, req.aparelho) };
     } else if (req.acao === 'trocarSenha') {
@@ -2674,4 +2681,123 @@ function asaasAtualizar() {
     arquivarIds(ok.map(i => String(vals[i][9])));
     ok.forEach(i => contas.deleteRow(i + 2));
   }
+}
+
+// ===================== CONVITES (uso único) =====================
+// Quem administra gera um código no app (Empresas → Convidar alguém). A pessoa convidada instala a própria cópia,
+// cria o login e usa o menu "3. Ativar meu acesso": o motor dela manda o código para o motor central, que libera
+// o acesso na hora (sem mexer no GitHub). Cada código vale uma vez só e expira em 7 dias.
+const MOTOR_CENTRAL = 'https://script.google.com/macros/s/AKfycbxRVB3s2yvY0SoTLsOvQS0WclWFzH4JDkJNpgtgRsij9KorFX22SMwEc_oiDiwws0wpAA/exec';
+const DONO_CENTRAL = '44d964380f06a13d3131fe8bb33b95eb1e69988a720785d6b990a01cbef664fe';   // hash do e-mail de quem administra (o mesmo do motores.json)
+const CONVITE_DIAS = 7;
+
+function hexSha(txt) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(txt))
+    .map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('');
+}
+function souCentral() {
+  if (CONFIG.PLANILHA_PRINCIPAL) return false;
+  try { return hexSha(Session.getEffectiveUser().getEmail().toLowerCase()) === DONO_CENTRAL; } catch (e) { return false; }
+}
+function lerJsonProp(k, padrao) { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(k) || 'null') || padrao; } catch (e) { return padrao; } }
+function gravarJsonProp(k, v) { PropertiesService.getScriptProperties().setProperty(k, JSON.stringify(v)); }
+function normalizarCodigo(c) { const s = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return s.length === 8 ? s.slice(0, 4) + '-' + s.slice(4) : s; }
+
+function criarConvite(nome) {
+  if (!souCentral()) throw new Error('Só quem administra o app pode criar convites.');
+  const letras = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Date.now());
+  let cod = ''; for (let i = 0; i < 8; i++) cod += letras[(bytes[i] + 256) % 32];
+  cod = cod.slice(0, 4) + '-' + cod.slice(4);
+  const l = lerJsonProp('CONVITES', []);
+  const c = { id: gerarAleatorio(8), h: hexSha(cod), nome: String(nome || '').trim().slice(0, 40), criado: Date.now(),
+              expira: Date.now() + CONVITE_DIAS * 864e5 };
+  l.push(c);
+  gravarJsonProp('CONVITES', l.slice(-100));
+  const link = 'https://nobregadelivery.github.io/centraldosboletos/instalar.html?convite=' + cod;
+  return { codigo: cod, link: link, convites: listarConvites(),
+           mensagem: 'Oi' + (c.nome ? ', ' + c.nome : '') + '! Te convidei para usar a Central dos Boletos, que junta os boletos do seu Gmail num app só.\n\n' +
+                     'Siga o passo a passo (uns 10 minutos, pelo computador):\n' + link + '\n\n' +
+                     'Seu código de convite: ' + cod + '\nEle vale uma vez só, por ' + CONVITE_DIAS + ' dias.' };
+}
+
+function listarConvites() {
+  if (!souCentral()) return [];
+  const dir = lerJsonProp('DIRETORIO', {});
+  return lerJsonProp('CONVITES', []).slice().reverse().map(c => ({
+    id: c.id, nome: c.nome, criado: c.criado, expira: c.expira, usadoEm: c.usadoEm || null, usadoPor: c.usadoPor || '',
+    situacao: c.usadoEm ? (c.hashEmail && dir[c.hashEmail] ? 'em uso' : 'removido') : (Date.now() > c.expira ? 'vencido' : 'aguardando')
+  }));
+}
+
+// Convite ainda não usado: apaga. Já usado: tira o acesso da pessoa.
+function cancelarConvite(id) {
+  if (!souCentral()) throw new Error('Só quem administra o app pode fazer isso.');
+  const l = lerJsonProp('CONVITES', []), c = l.find(x => x.id === id);
+  if (!c) return;
+  if (c.usadoEm) {
+    const dir = lerJsonProp('DIRETORIO', {});
+    if (c.hashEmail) { delete dir[c.hashEmail]; gravarJsonProp('DIRETORIO', dir); }
+    c.removidoEm = Date.now();
+    gravarJsonProp('CONVITES', l);
+  } else gravarJsonProp('CONVITES', l.filter(x => x.id !== id));
+}
+
+// Chamado pelo motor da pessoa convidada
+function atenderConvite(req) {
+  if (!souCentral()) throw new Error('Este não é o motor central da Central dos Boletos.');
+  const cache = CacheService.getScriptCache();
+  const falhas = Number(cache.get('convite_falhas') || 0);
+  if (falhas >= 30) throw new Error('Muitas tentativas. Espere uma hora e tente de novo.');
+  const falhar = msg => { cache.put('convite_falhas', String(falhas + 1), 3600); throw new Error(msg); };
+  const hash = String(req.hash || '').toLowerCase(), url = String(req.url || '');
+  if (!/^[0-9a-f]{64}$/.test(hash)) falhar('Cadastro inválido.');
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/exec$/.test(url)) falhar('O motor ainda não foi publicado (passo 3 do guia).');
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const l = lerJsonProp('CONVITES', []), h = hexSha(normalizarCodigo(req.codigo));
+    const c = l.find(x => x.h === h);
+    if (!c) falhar('Código de convite não encontrado. Confira as letras e os números.');
+    if (c.usadoEm) {
+      if (c.hashEmail === hash && !c.removidoEm) {   // a mesma pessoa reinstalou: só atualiza o endereço
+        const dir = lerJsonProp('DIRETORIO', {}); dir[hash] = url; gravarJsonProp('DIRETORIO', dir);
+        return { mensagem: 'Acesso atualizado. Entre no app com o seu e-mail e senha.' };
+      }
+      falhar('Este convite já foi usado. Peça um novo para quem te convidou.');
+    }
+    if (Date.now() > c.expira) falhar('Este convite venceu. Peça um novo para quem te convidou.');
+    const dir = lerJsonProp('DIRETORIO', {}); dir[hash] = url; gravarJsonProp('DIRETORIO', dir);
+    c.usadoEm = Date.now(); c.hashEmail = hash; c.usadoPor = String(req.email || '').slice(0, 80);
+    gravarJsonProp('CONVITES', l);
+    return { mensagem: 'Acesso liberado! Entre no app com o seu e-mail e senha.' };
+  } finally { lock.releaseLock(); }
+}
+
+// O app pergunta onde fica o motor de um e-mail (pelo hash), para quem entrou por convite
+function atenderDiretorio(req) {
+  if (!souCentral()) return { url: null };
+  return { url: lerJsonProp('DIRETORIO', {})[String(req.hash || '').toLowerCase()] || null };
+}
+
+// Menu da pessoa convidada: "3. Ativar meu acesso (código de convite)"
+function ativarComConvite() {
+  const ui = SpreadsheetApp.getUi();
+  if (!PropertiesService.getScriptProperties().getProperty('LOGIN')) { ui.alert('Antes, faça o passo 2: menu 💰 Boletos → 2. Criar ou alterar meu login.'); return; }
+  const url = ScriptApp.getService().getUrl();
+  if (!url || !/\/exec$/.test(url)) {
+    ui.alert('Ainda falta publicar o motor: em Extensões → Apps Script, clique em Implantar → Nova implantação → ' +
+             'App da Web, "Executar como: Eu", "Quem pode acessar: Qualquer pessoa" → Implantar. Depois volte aqui.');
+    return;
+  }
+  const r = ui.prompt('Ativar meu acesso', 'Digite o código de convite que você recebeu (ex.: ABCD-1234):', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  const email = Session.getEffectiveUser().getEmail().toLowerCase();
+  let resp;
+  try {
+    const f = UrlFetchApp.fetch(MOTOR_CENTRAL, { method: 'post', contentType: 'text/plain', muteHttpExceptions: true, followRedirects: true,
+      payload: JSON.stringify({ acao: 'convite', codigo: r.getResponseText(), hash: hexSha(email), email: email, url: url }) });
+    resp = JSON.parse(f.getContentText());
+  } catch (e) { ui.alert('Não consegui falar com a Central agora. Tente de novo em alguns minutos.\n(' + e.message + ')'); return; }
+  if (!resp.ok) { ui.alert('Não deu certo: ' + resp.mensagem); return; }
+  ui.alert(resp.dados.mensagem + '\n\nApp: nobregadelivery.github.io/centraldosboletos\nE-mail: ' + email);
 }

@@ -36,6 +36,8 @@
 
   .resumo { background: var(--card); border-radius: 16px; box-shadow: var(--shadow); padding: 18px 20px; }
   .resumo h2 { font-size: 15px; margin: 0 0 10px; }
+  .resumo.convite { margin-bottom: 12px; border: 2px solid var(--accent); }
+  .resumo[hidden] { display: none; }
   .resumo ul { margin: 0; padding-left: 20px; }
   .resumo li { margin: 4px 0; }
 
@@ -89,12 +91,17 @@
 </header>
 
 <main>
+  <div class="resumo convite" id="convite" hidden>
+    <h2>Seu código de convite</h2>
+    <p style="margin:0"><code id="codConvite" style="font-size:20px;font-weight:700;letter-spacing:.08em;padding:4px 10px"></code></p>
+    <p style="margin:8px 0 0;font-size:14.5px">Guarde: você vai digitar no passo 4.</p>
+  </div>
   <div class="resumo">
     <h2>Você vai precisar de</h2>
     <ul>
       <li>Uma conta <b>Gmail</b>. Seus boletos ficam na sua conta Google, ninguém mais vê.</li>
       <li>Um <b>computador</b> com o Chrome, só para a instalação.</li>
-      <li>Acesso à planilha modelo. Peça para quem te convidou compartilhar com o seu e-mail.</li>
+      <li>O <b>código de convite</b> que você recebeu (vale uma vez só, por 7 dias).</li>
     </ul>
     <p class="nota" style="margin-top:12px">Nada é pago automaticamente: o app só lê e organiza. Você continua pagando pelo app do seu banco.</p>
   </div>
@@ -113,7 +120,7 @@
         <li>Na tela "Copiar documento", clique em <span class="menu">Fazer uma cópia</span>.</li>
         <li>A sua cópia abre sozinha. Ela já vem com o programa dentro e fica só na sua conta.</li>
       </ol>
-      <p class="aviso"><b>"Você precisa de acesso"?</b> Peça para quem te convidou compartilhar o modelo com o seu e-mail.</p>
+      <p class="aviso"><b>"Você precisa de acesso"?</b> Clique em <b>Solicitar acesso</b>. Quem te convidou recebe um e-mail e libera.</p>
     </div>
   </section>
 
@@ -158,14 +165,15 @@
   <section class="passo" id="p4">
     <div class="num">4</div>
     <div class="corpo">
-      <h2>Criar o seu login e pedir a liberação</h2>
+      <h2>Criar o seu login e ativar com o convite</h2>
       <ol>
         <li>Na planilha, clique em <span class="menu">💰 Boletos → 2. Criar ou alterar meu login</span>.</li>
         <li>Seu e-mail de login já aparece. Digite uma senha com <b>pelo menos 8 caracteres</b>, repita e clique em <span class="menu">Salvar login</span>.</li>
-        <li>Clique em <span class="menu">💰 Boletos → 3. Gerar meu cadastro para o app</span>.</li>
-        <li>Clique em <span class="menu">Copiar mensagem</span> e envie para quem te convidou, pelo WhatsApp ou e-mail.</li>
+        <li>Clique em <span class="menu">💰 Boletos → 3. Ativar meu acesso (código de convite)</span>.</li>
+        <li>Digite o seu código de convite<span class="cod-inline"></span> e clique em <span class="menu">OK</span>. Aparece <b>"Acesso liberado!"</b>.</li>
       </ol>
-      <p class="nota">A mensagem não contém a sua senha. A senha fica guardada de forma embaralhada no seu motor, e nem quem te convidou consegue vê-la.</p>
+      <p class="nota">A sua senha não sai da sua planilha: ela fica guardada de forma embaralhada no seu motor, e nem quem te convidou consegue vê-la.</p>
+      <p class="aviso"><b>"Convite já usado" ou "venceu"?</b> Cada código vale uma vez só, por 7 dias. Peça um novo para quem te convidou.</p>
     </div>
   </section>
 
@@ -173,7 +181,7 @@
     <div class="num">5</div>
     <div class="corpo">
       <h2>Entrar no app e cadastrar suas empresas</h2>
-      <p>Quando avisarem que o seu acesso foi liberado:</p>
+      <p>Com o acesso liberado:</p>
       <ol>
         <li><a href="./">Abra o app</a> e entre com o seu e-mail e a senha do passo 4.</li>
         <li>Toque em <span class="menu">Empresas</span> e cadastre cada empresa que te manda boleto: o nome e o e-mail de onde vem a cobrança. Para achar esse e-mail, abra uma cobrança no Gmail e copie o endereço ao lado do nome do remetente.</li>
@@ -198,17 +206,25 @@
   </div>
 
   <details class="admin">
-    <summary>Para quem administra o app: liberar um novo usuário</summary>
+    <summary>Para quem administra o app: convidar alguém</summary>
     <ol>
-      <li>Receba a mensagem de cadastro da pessoa (passo 4). Ela tem uma linha assim: <code>"3f9a…": "https://script.google.com/macros/s/…/exec"</code></li>
-      <li>Abra o <a href="https://github.com/NobregaDelivery/centraldosboletos/blob/main/motores.json" target="_blank" rel="noopener">motores.json no GitHub</a> e clique no lápis (Edit this file).</li>
-      <li>Coloque uma vírgula no fim da última linha com endereço e cole a linha nova antes da chave <code>}</code>.</li>
-      <li>Clique em <b>Commit changes</b>, confirme e espere 1 a 2 minutos.</li>
+      <li>No app, toque em <b>Empresas → Convidar alguém → Gerar convite</b>.</li>
+      <li>Envie a mensagem pelo WhatsApp (ou copie). Ela tem o link deste guia e o código.</li>
+      <li>Quando a pessoa fizer o passo 4, o acesso dela é liberado sozinho e o convite aparece como <b>Em uso</b>.</li>
     </ol>
-    <p>Para tirar alguém, apague a linha dela. Antes de mandar este guia, compartilhe a planilha "Central dos Boletos (modelo)" com o e-mail da pessoa como Leitor.</p>
+    <p>Para tirar o acesso de alguém, toque em <b>Tirar acesso</b> no convite dela. Convite que não foi usado pode ser cancelado.</p>
   </details>
 
   <footer>Central dos Boletos · <a href="./">voltar ao app</a></footer>
 </main>
+<script>
+  (function () {
+    var c = (new URLSearchParams(location.search).get('convite') || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
+    if (!c) return;
+    document.getElementById('codConvite').textContent = c;
+    document.getElementById('convite').hidden = false;
+    document.querySelectorAll('.cod-inline').forEach(function (e) { e.innerHTML = ' (<code>' + c + '</code>)'; });
+  })();
+</script>
 </body>
 </html>

@@ -380,6 +380,20 @@
     <p class="note">Quando chegar um comprovante desse e-mail, a conta é marcada como paga: pelo código do boleto, ou pelo valor quando só uma conta em aberto tiver esse valor. Se ficar em dúvida, não mexe em nada.</p>
     <button class="btn" type="submit" id="salvarComp">Adicionar e-mail de comprovante</button>
   </form>
+  <div id="convSec" hidden>
+    <p class="sec">Convidar alguém</p>
+    <p class="note" style="padding:0 18px">Gere um convite e mande para a pessoa. Cada código vale uma vez só, por 7 dias. Quando ela ativar, o acesso é liberado sozinho.</p>
+    <div class="integ-nova" id="convNovo" hidden>
+      <p><b>Convite criado:</b> <span id="convCodigo" style="font-weight:700;letter-spacing:.06em"></span></p>
+      <code id="convMsg" style="white-space:pre-wrap"></code>
+      <div class="nibo-btns" style="padding:0">
+        <button class="btn primary" type="button" id="convCopiar">Copiar mensagem</button>
+        <a class="btn" id="convZap" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Enviar pelo WhatsApp</a>
+      </div>
+    </div>
+    <ul class="forn-list" id="convList"></ul>
+    <div class="nibo-btns"><button class="btn" type="button" id="convCriar">Gerar convite</button></div>
+  </div>
   <div id="niboSec">
     <p class="sec">Contabilidade (Nibo)</p>
     <p class="note" style="padding:0 18px">Traz as guias que o escritório contábil manda pelo Nibo (DAS, FGTS, DARF, ICMS…) com valor, vencimento, código de barras e Pix. Marcar como pago aqui avisa o escritório no Nibo.</p>
@@ -472,6 +486,8 @@
   // Cada usuário tem o próprio "motor" (Google Apps Script). A lista fica em motores.json,
   // indexada pelo hash do e-mail. O endereço sozinho não dá acesso: o login é conferido no motor.
   const DIRETORIO = 'motores.json';
+  // Quem entrou por convite fica no diretório do motor central (o convite libera o acesso sozinho)
+  const MOTOR_CENTRAL = 'https://script.google.com/macros/s/AKfycbxRVB3s2yvY0SoTLsOvQS0WclWFzH4JDkJNpgtgRsij9KorFX22SMwEc_oiDiwws0wpAA/exec';
 </script>
 <script>
   const LIB = {
@@ -671,7 +687,10 @@
     let mapa;
     try { mapa = await (await fetch(DIRETORIO + '?v=' + Date.now(), { cache: 'no-store' })).json(); }
     catch (e) { throw new Error('Não consegui carregar a lista de usuários. Tente de novo.'); }
-    return mapa[await hashEmail(email)] || null;
+    const h = await hashEmail(email);
+    if (mapa[h]) return mapa[h];
+    try { const r = await postar(MOTOR_CENTRAL, { acao: 'diretorio', hash: h }); return (r.ok && r.dados && r.dados.url) || null; }
+    catch (e) { return null; }
   }
   const aparelhoAtual = () => (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
   // Ações sem sessão (login, trocar e redefinir senha); as que devolvem token já deixam o aparelho conectado
@@ -1324,7 +1343,45 @@
     if (!f || !confirm('Parar de criar a conta "' + f.nome + '" todo mês?\nAs que já estão na lista continuam.')) return;
     b.disabled = true; await atualizar('pararFixa', [f.id]);
   });
-  $('btnForn').addEventListener('click', () => { renderForn(); dlgF.showModal(); carregarIntegracoes(); });
+  $('btnForn').addEventListener('click', () => { renderForn(); dlgF.showModal(); carregarIntegracoes(); carregarConvites(); });
+
+  // ---------- Convites (uso único) ----------
+  let podeConvidar = false;
+  const dataCurta = ms => new Date(ms).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  function renderConvites(l) {
+    $('convSec').hidden = !podeConvidar;
+    if (!podeConvidar) return;
+    const rot = { aguardando: 'Aguardando', 'em uso': 'Em uso', vencido: 'Vencido', removido: 'Acesso removido' };
+    $('convList').innerHTML = (l || []).length ? l.map(c => `
+      <li><div><b>${esc(c.nome || 'Convite')}</b><span>${rot[c.situacao] || c.situacao}${c.usadoEm ? ' · ' + esc(c.usadoPor) + ' desde ' + dataCurta(c.usadoEm) : ' · criado ' + dataCurta(c.criado) + (c.situacao === 'aguardando' ? ', vale até ' + dataCurta(c.expira) : '')}</span></div>
+      ${c.situacao === 'removido' ? '' : `<button class="x" type="button" data-conv="${esc(c.id)}" data-usado="${c.usadoEm ? 1 : 0}">${c.usadoEm ? 'Tirar acesso' : 'Cancelar'}</button>`}</li>`).join('')
+      : '<li><div><span>Nenhum convite ainda.</span></div></li>';
+  }
+  async function carregarConvites() {
+    if (!podeConvidar) { renderConvites([]); return; }
+    try { renderConvites(await chamar('listarConvites')); } catch (e) { $('convList').innerHTML = '<li><div><span>' + esc(e.message) + '</span></div></li>'; }
+  }
+  $('convCriar').addEventListener('click', async () => {
+    const nome = prompt('Para quem é o convite? (só para você saber depois)', '');
+    if (nome === null) return;
+    const b = $('convCriar'); b.disabled = true; b.textContent = 'Gerando…';
+    try {
+      const r = await chamar('criarConvite', nome);
+      $('convCodigo').textContent = r.codigo; $('convMsg').textContent = r.mensagem;
+      $('convZap').href = 'https://wa.me/?text=' + encodeURIComponent(r.mensagem);
+      $('convNovo').hidden = false; renderConvites(r.convites);
+    } catch (e) { toast(e.message); }
+    b.disabled = false; b.textContent = 'Gerar convite';
+  });
+  $('convCopiar').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('convMsg').textContent); toast('Mensagem copiada'); } catch (e) { toast('Não consegui copiar; selecione o texto.'); }
+  });
+  $('convList').addEventListener('click', async ev => {
+    const b = ev.target.closest('[data-conv]'); if (!b) return;
+    const usado = b.dataset.usado === '1';
+    if (!confirm(usado ? 'Tirar o acesso dessa pessoa ao app? A planilha dela continua com ela.' : 'Cancelar este convite? O código deixa de valer.')) return;
+    try { renderConvites(await chamar('cancelarConvite', b.dataset.conv)); toast(usado ? 'Acesso removido' : 'Convite cancelado'); } catch (e) { toast(e.message); }
+  });
 
   // ---------- Integrações com outros programas ----------
   let integ = { chaves: [], log: [] }, chaveNova = null;
@@ -1474,6 +1531,7 @@ Cada pedido fica registrado na Central (Empresas → Integrações → Últimos 
   // ---------- Entrar / sair ----------
   function aplicarEstado(r) {
     nibo = r.nibo === undefined ? null : r.nibo; renderNibo();
+    podeConvidar = !!r.podeConvidar; $('convSec').hidden = !podeConvidar;
     contas = r.contas; fornecedores = r.fornecedores; caixas = r.caixas || []; sugestoes = r.sugestoes || [];
     esperadas = r.esperadas || []; empresas = r.empresas || {}; fixas = r.fixas || []; comprovantes = r.comprovantes || [];
     render(); renderForn();
